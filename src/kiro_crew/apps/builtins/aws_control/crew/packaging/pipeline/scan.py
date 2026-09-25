@@ -56,6 +56,39 @@ _VENDOR_TOKEN_COMPILED: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
     (label, re.compile(rf"\b{fragment}\b")) for label, fragment in _VENDOR_TOKEN_PATTERNS
 )
 
+# The redactor keeps the key that names a value and replaces the value alone, so a
+# skill stored already redacted reads ``aws_secret_access_key=[REDACTED: credential]``
+# -- and the labelled pattern below, run on every line whether or not the canonical
+# detector loads, matched its ``[REDACTED:`` head as the value and aborted the crew
+# build on text that holds no secret. The registry of the redactor's own tags is read
+# from the scrubber so a tag added there reaches here with no edit; the fallback
+# restates the two literals for the standalone case. The exemption is the canonical
+# floor's: a tag run is declined only where it FILLS the value -- followed by no
+# further value atom when unquoted, by the SAME closing quote when quoted, a quote not
+# doubled (a doubled quote is an escaped interior quote, never the close) -- so a tag
+# that merely heads a quoted value, a tag with bytes glued to it (an escape pair
+# included), a tag closed by a doubled quote, or a tag in another case is a value and
+# still a finding.
+try:  # pragma: no cover - exercised by whichever branch the environment allows
+    from kiro_crew.security import CREDENTIAL_REDACTION_TAGS as _REDACTION_TAGS
+except Exception:  # pragma: no cover
+    _REDACTION_TAGS = ("[REDACTED: credential]", "[REDACTED: encoded credential]")
+
+_REDACTION_TAG_RUN = "(?-i:(?:" + "|".join(re.escape(tag) for tag in _REDACTION_TAGS) + ")+)"
+# One byte of a labelled value, the canonical redactor's atom (``_AWS_VALUE_CLASS``)
+# restated for the standalone case: a value byte, or an escape pair whose escaped
+# byte is neither a quote, whitespace, nor a letter encoding whitespace -- ``\/``
+# in a PHP-encoded secret is the value's, the escaped quote of an enclosing string
+# literal is its close. "Fills the value" is then "followed by no further atom".
+_VALUE_ATOM = r"(?:\\[^\s\"'nrtfv]|[^\s\"',}\\])"
+# Escaped whitespace heading the value (``\n<v>`` as a serializer writes a value
+# beginning with a line break) is consumed with it, as the canonical redactor does.
+_VALUE_HEAD = r"(?:\\[nrtfv]){0,8}"
+_LABELLED_VALUE = (
+    r"(?:(?P<lq>\\?[\"'])(?!" + _REDACTION_TAG_RUN + r"(?P=lq)(?!(?P=lq)))"
+    r"|(?!" + _REDACTION_TAG_RUN + r"(?!" + _VALUE_ATOM + ")))" + _VALUE_HEAD + _VALUE_ATOM + "+"
+)
+
 _HARD_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("aws-access-key", re.compile(rf"\b(?:{_AWS_KEY_PREFIXES})[0-9A-Z]{{16}}\b")),
     # A LABELLED secret. The pattern above matches an AWS key ID, which has a
@@ -64,13 +97,14 @@ _HARD_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     # prompt reached the deployed image. What makes it findable is the label, which is
     # how this repo's own detector finds it (`security.py:_HARD_CREDENTIAL_RE`,
     # described in security_posture.py as covering "labelled secret-access-key and
-    # session-token forms"). Spelled here from that same shape, and the canonical
-    # module is preferred over it below when importable.
+    # session-token forms"). Spelled here from that same shape -- a label quote bare or
+    # escaped, a backslash never a value byte, the tag exemption above -- and the
+    # canonical module is preferred over it below when importable.
     (
         "aws-secret-labelled",
         re.compile(
             r"(?:SecretAccessKey|aws_secret_access_key|SessionToken|aws_session_token)"
-            r"[\"']?\s*[:=]\s*[\"']?[^\s\"',}]+",
+            r"(?:\\?[\"'])?\s*[:=]\s*" + _LABELLED_VALUE,
             re.IGNORECASE,
         ),
     ),
