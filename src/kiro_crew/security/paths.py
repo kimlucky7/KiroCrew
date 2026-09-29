@@ -177,6 +177,9 @@ _SENSITIVE_HOME_DIRS: list[str] = [
 #                                 (owner-only dir OUTSIDE the log's directory);
 #                                 the bare leaf covers pre-migration installs
 #   app_admission.json            App Kit admission ceiling (apps/admission.py)
+#   app-unit-approvals.json       per-app unit-kind approvals (apps/manager.py);
+#                                 intersected with an app's own declaration, so
+#                                 a writable copy widens app authority
 #   security_policy.json          governance ceiling (KEYSTONE, governance.py)
 #   profiles                      per-surface governance profiles
 #   admission_policy.json         signed-plugin admission trust root
@@ -972,6 +975,18 @@ _WRITE_PROTECTED_HOME_PATHS: list[str] = [
         "config.local.json",
         "playwright-cli-config.json",
         "subagents",
+        # The operator's per-app unit-kind approvals (apps/manager.py). WRITE-
+        # protected, not read+write sensitive: it holds no secret, and the runtime
+        # must READ it to intersect what an app DECLARES with what the operator
+        # APPROVED -- an adapter sandbox reads it for the same intersection, which
+        # is the whole point of the file. The ONE threat is a WRITE: an agent able
+        # to rewrite it could widen any app's authority to a unit kind the operator
+        # never granted. So the write is fenced (here, and on the OS read-only seal
+        # / child-withheld / precreate-stub lists) while the read stays allowed,
+        # matching how ``config.json`` is handled. ``apps.manager`` opens it
+        # directly, not through this gate, so every lifecycle operation still
+        # writes it.
+        "app-unit-approvals.json",
     )
 ] + [
     # Ops Mission Control's on-call schedule. WRITE-protected, not read+write

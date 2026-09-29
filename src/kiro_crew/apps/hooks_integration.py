@@ -367,14 +367,67 @@ async def on_app_enable(
     app_name: str,
     app_info: dict[str, Any],
     *,
+    transition: str = "reload",
     cron_service: Any = None,
     broadcast_fn: Any = None,
     spawn_impl: Any = None,
 ) -> dict[str, Any]:
     """Called after an app is enabled — register routes and invoke startup hook.
 
+    ``transition`` names WHICH lifecycle edge drives this wiring, because the same
+    route+hook wiring serves three distinct edges and only one of them restores
+    authority. Disable, reload and re-enable are three transitions, not one with a
+    flag:
+
+    * ``"enable"`` -- a genuine (re-)enable: the operator re-registered trust, so a
+      teardown tombstone the disable set is lifted and the app is grantable again.
+    * ``"reload"`` (default) -- the reconciler re-imports an already-live app whose
+      hook signature changed. This is NOT a re-enable and must RETAIN the
+      revocation: a NARROWING update whose in-flight commit outran the bounded
+      drain deliberately keeps the tombstone so that retired-authority write cannot
+      persist under the narrowed manifest. Lifting it here on a reload would negate
+      exactly that retention. The tombstone lifts on the next genuine enable.
+
+    Defaults to ``"reload"`` so a caller that does not name its edge retains the
+    revocation -- the safe direction, since a stale tombstone denies rather than
+    over-grants.
+
     Returns dict with hook results to include in the enable response.
     """
+    # Lift the teardown tombstone ONLY on a genuine (re-)enable. A disable set one
+    # to hard-deny the app's grant during the disable window; re-registering trust
+    # is what restores it. A reload is not that edge and retains the revocation
+    # (see ``transition`` above).
+    if transition == "enable":
+        from kiro_crew.eventlog.grants import ReplacementRevocationWriteError, unrevoke
+
+        try:
+            # GPT 6.1 F2 (no-sync-store-call-from-a-coroutine): unrevoke bumps
+            # the durable grant epoch, which reads+replaces persistent JSON under a
+            # file lock. Offload it so this storage I/O does not block chat and
+            # heartbeat scheduling on the serving loop.
+            await asyncio.to_thread(unrevoke, app_name)
+        except ReplacementRevocationWriteError as restore_error:
+            # GPT 6.1 F2 (persist-before-you-publish): a FAILED durable
+            # marker-clear must NOT be swallowed into a successful-looking enable.
+            # A stuck replacement-revocation marker leaves the enabled app
+            # contribution-denied across restarts with nothing visible saying so.
+            # Raise it as GrantRestorationError -- the same signal enable_app and
+            # register_external_app turn into a retryable failure -- so this enable
+            # fails loudly and the reconciler/lifecycle retries rather than
+            # reporting a sound enable over a denial that never lifted.
+            logger.warning(
+                "App %s: durable contribution-grant restoration failed on enable; "
+                "failing the enable so it is retried",
+                app_name,
+                exc_info=True,
+            )
+            from kiro_crew.apps.manager import GrantRestorationError
+
+            raise GrantRestorationError(
+                f"app {app_name!r}: durable contribution-grant restoration failed "
+                f"on enable: {restore_error}"
+            ) from restore_error
     result: dict[str, Any] = {}
     denied = app_execution_denied(
         app_name,

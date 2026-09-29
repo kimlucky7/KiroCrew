@@ -164,6 +164,13 @@ def _url_payload_command(n: int) -> str:
 #: holds the canonical spelling and is off the event loop, so the anchors resolve
 #: inline. No new entry point, no target, no matching rule and no threshold moved.
 #:
+#: Raised again for the ``app-unit-approvals.json`` protected-path
+#: entry in ``paths.py`` (the app contribution protocol). That file is the only
+#: thing between an app's declared unit contributions and read/append access to a
+#: crew member's whole log -- the runtime intersects the declaration with it -- so a
+#: session must not be able to write it; the twelve lines are the ``_CREW_SECRET_LEAVES``
+#: entry and its rationale, not control logic that belongs elsewhere.
+#:
 #: The number IS the package's measured total, carrying no spare room: a ratchet with
 #: headroom admits exactly the unreviewed growth it exists to catch, so the next line
 #: added here fails this gate and has to be re-pinned deliberately, with its reason
@@ -181,7 +188,21 @@ def _url_payload_command(n: int) -> str:
 #:
 #: Raised for six stdout-only filters on the read-only bash allowlist (`tr`, `nl`,
 #: `rev`, `comm`, `od`, `column`) and their reason comment.
-_PACKAGE_LINE_BUDGET = 28_438
+#:
+#: Raised again for the app-contribution protocol: the new ``eventlog`` contrib and
+#: grants modules, the installation-generation and replacement-revocation fences,
+#: and the roster redaction/bound add lines the gate cannot avoid.
+#:
+#: Raised again for GPT 6.1 F3 and the Security Scope tightening:
+#: ``grants.unrevoke`` clears the replacement-revocation marker before the
+#: epoch bump and invalidates the local cache (persist-before-you-publish), and
+#: ``app-unit-approvals.json`` moves to the write-protected tier in ``paths.py``
+#: (read allowed for the declaration intersection, write still fenced). Both carry
+#: the reason comments the gate counts.
+#:
+#: Raised again to the measured total after rebasing onto a main that added its
+#: own ``paths.py`` security lines alongside this PR's -- both increments coexist.
+_PACKAGE_LINE_BUDGET = 28_453
 
 #: Ceiling on any ONE file in the package. This is what the bound is really for --
 #: a package total says nothing about a single file growing back into a second
