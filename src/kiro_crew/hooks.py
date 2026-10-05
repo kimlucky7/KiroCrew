@@ -1049,6 +1049,29 @@ class HookManager:
         security_targets = [normalized]
         if command and command not in security_targets:
             security_targets.append(command)
+        # A harness may stream its shell tool under a kind other than ``execute``
+        # (the DeepSeek harness sends ``bash`` as ``other``), so no shell command
+        # is recovered and every check below would see only the title. The tool's
+        # own ``command``/``cmd`` argument is then judged by the SHELL-class
+        # checks (scan ceiling, IMDS, env-credential, exfiltration) and the
+        # deny-rule catalog -- never by the path tier, which reads a value as a
+        # filename. Deny-only: allow paths and the shell exemption still key on
+        # ``is_shell``/``command``, so this can refuse a call but never grant
+        # one. A call that names its MCP server is left out: its
+        # ``command``-named arguments are not shell text, and it is governed by
+        # ``@server/tool`` rules. A harness that names no server for its MCP
+        # calls (claude-agent-acp, opencode, dsh, pi) cannot be told apart here,
+        # so such a call's ``command`` argument is checked too.
+        raw_shell_commands: list[str] = []
+        if not command and not mcp_server_name and isinstance(raw_params, dict):
+            for _key in ("command", "cmd"):
+                _raw_command = raw_params.get(_key)
+                if (
+                    isinstance(_raw_command, str)
+                    and _raw_command
+                    and _raw_command not in raw_shell_commands
+                ):
+                    raw_shell_commands.append(_raw_command)
 
         # Sensitive path protection (always enforced, before all other checks).
         # kiro-cli adds "Reading "/"Running: " display prefixes; the
@@ -1121,6 +1144,15 @@ class HookManager:
             # shell. Denied at the gate — against the raw command too, not just
             # the title.
             reason = audit_bash_exfiltration(target, enabled_ids=enabled_ids)
+            if reason:
+                return ToolHookResult.deny(reason)
+        for target in raw_shell_commands:
+            # Shell-class checks only, in the same order as above. The size
+            # ceiling is pass 0 of ``is_sensitive_bash_command``, so a value over
+            # it is refused before any regex below or in the deny catalog runs.
+            reason = is_sensitive_bash_command(
+                target, enabled_ids=enabled_ids
+            ) or audit_bash_exfiltration(target, enabled_ids=enabled_ids)
             if reason:
                 return ToolHookResult.deny(reason)
         # The display title is backend-variable and may NOT carry the path (an
@@ -1300,6 +1332,10 @@ class HookManager:
         governance_mcp_ref = mcp_identity_ref(mcp_server_name, mcp_tool_name)
         if command:
             deny_targets.append(command)
+        for _raw_command in raw_shell_commands:
+            # Already past the scan ceiling above; see ``raw_shell_commands``.
+            if _raw_command not in deny_targets:
+                deny_targets.append(_raw_command)
         for target in deny_targets:
             reason = authority.is_denied(
                 target,
