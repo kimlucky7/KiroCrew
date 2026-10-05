@@ -840,13 +840,17 @@ say) goes in `<home>/config.local.json`, the override file the operator owns.
 A chat turn is the real thing too:
 `gw.post("/api/chat", {"message": text, "slot": slot_key}, timeout=TURN_SECS)`
 returns the SSE response, and the test reads `resp.content` line by line
-(`data: {...}` events, `data: [DONE]` last). The fake model's `[[SLOW]]`
-prompt streams thirty chunks half a second apart, which is what a timing
-contract across two slots is built on; a cold session start costs several
-seconds before the first chunk, so bound a turn from the module's own
-`pytest.mark.timeout` (the largest single wait sits under it, so a wedged turn
-fails readably instead of killing the worker) and assert on the ORDER of what
-the two streams saw, never on absolute latency.
+(`data: {...}` events, `data: [DONE]` last). To order two turns, use the fake
+model's `[[SLOW_HOLD:<token>]]` marker (`fake_acp_backend.slow_hold_trigger`):
+set `KIROCREW_FAKE_ACP_HOLD_DIR` to a directory under `tmp_path` before the
+boot, and create `slow_hold_path(dir, token)` only once the event you order on
+has been observed; the held turn streams one chunk and waits there. A cold
+session start costs several seconds before the first chunk, so warm each slot
+with one plain turn first, bound each awaited signal by a named lost-run
+ceiling ([class 6](#6-a-hang-is-a-lost-run-not-a-failed-test)) under the
+module's `pytest.mark.timeout`, so a wedged turn fails readably instead of
+killing the worker, and assert on the ORDER of what the two streams saw, never on absolute
+latency. `test/integration/test_streaming.py` is the worked example.
 
 The directory is a package (`test/integration/__init__.py`) so its conftest
 imports as `integration.conftest`. The unit files import `test/conftest.py` by
