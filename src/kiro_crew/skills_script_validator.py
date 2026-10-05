@@ -80,6 +80,8 @@ _BANNED_ATTR_CALLS = {
     "rmtree",                                 # shutil.rmtree
     "Popen", "run", "call", "check_call", "check_output",  # subprocess.*
     "import_module",                          # importlib.import_module
+    "_getframe", "currentframe",              # sys._getframe / inspect.currentframe
+    "_getframe", "currentframe",              # sys._getframe / inspect.currentframe
     # Process replacement and creation that lives on ``os``. The module itself
     # cannot be banned — a skill legitimately needs os.path/os.environ — so the
     # specific calls are named instead: os.exec* replaces this process with a
@@ -137,8 +139,8 @@ _DANGEROUS_IMPORT_ROOTS = {
     "pty", "pickle", "marshal", "multiprocessing", "runpy", "code",
     "builtins",
 }
-# Module roots whose banned attributes are dangerous even when merely referenced
-# (assigned/aliased) rather than called directly (``f = os.remove``).
+# Module roots whose attributes are dangerous when referenced (assigned/aliased)
+# rather than called directly (``f = os.remove``).
 _DANGEROUS_ATTR_ROOTS = {"os", "shutil", "subprocess", "importlib", "ctypes"}
 # Network/egress library roots. Banned outright in generated scripts: the skill
 # contract forbids calling unknown network hosts, and matching on the import
@@ -156,6 +158,11 @@ _NETWORK_IMPORT_ROOTS = {
 # ``vars(os)["execv"]``. The attribute name is a string constant this pass does
 # not evaluate, so the module argument is what gets flagged.
 _NAMESPACE_LOOKUP_NAMES = {"getattr", "vars"}
+# Attribute lookup functions where a string 2nd arg names the attribute.
+_ATTR_LOOKUP_NAMES = {"getattr", "hasattr", "setattr", "delattr"}
+# Attribute lookup functions that take a string attr name as 2nd argument.
+# hasattr/setattr/delattr share the same shape as getattr.
+_ATTR_LOOKUP_NAMES = {"getattr", "hasattr", "setattr", "delattr"}
 
 # Attributes that expose a module's namespace as a mapping, reachable with a
 # subscript: ``os.__dict__["execv"]``. Same reasoning as above — deny the handle,
@@ -170,11 +177,26 @@ _NAMESPACE_ATTRS = {"__dict__", "__getattribute__", "__getattr__"}
 _BUILTIN_DESCRIPTOR_BASES = {"object", "type", "super"}
 _DESCRIPTOR_METHODS = {"__getattribute__", "__getattr__"}
 
+# Attribute names that give reflection/introspection access to dangerous
+# internals on ANY base. Deny regardless of base because they are always exotic.
+# ``.__self__`` reaches the module backing a builtin function
+# (``print.__self__.eval(...)``). ``.__subclasses__`` enables type-introspection
+# bypasses. ``.__loader__`` and ``.__spec__`` reach the module loader.
+# ``.__globals__`` exposes the function's module namespace.
+_DANGEROUS_ATTRS_ANY_BASE = {
+    "__self__", "__subclasses__", "__loader__", "__spec__", "__globals__",
+    "f_builtins", "f_globals", "f_locals"
+}
+
+# String literal keys in subscripts that reach builtins indirectly:
+# ``vars()["__builtins__"]`` and ``globals()["__builtins__"]``.
+_BANNED_STRING_KEYS = {"__builtins__", "builtins"}
+
 # Dangerous callables that must not be pulled in via ``from <mod> import <name>``
 # (which would bind a bare name the call-site checks miss, e.g.
 # ``from os import remove; remove(x)``). Checked on the ORIGINAL imported name,
 # so ``from os import remove as rm`` is caught too.
-_DANGEROUS_IMPORTED_NAMES = _BANNED_CALL_NAMES | _BANNED_ATTR_CALLS
+_DANGEROUS_IMPORTED_NAMES = _BANNED_CALL_NAMES | _BANNED_ATTR_CALLS | {"modules"}
 
 
 def _ast_findings(content: str) -> List[str]:
@@ -191,6 +213,11 @@ def _ast_findings(content: str) -> List[str]:
         tree = ast.parse(content or "")
     except SyntaxError:
         return findings  # syntax error is reported separately by the caller
+    # Build parent map to check context for benign patterns.
+    parent_map: dict = {}
+    for parent in ast.walk(tree):
+        for child in ast.iter_child_nodes(parent):
+            parent_map[child] = parent
     # Pre-pass: map each bound name to its imported module root, so aliased
     # access (``import os as x; x.remove``) resolves to the real module.
     alias_map: dict[str, str] = {}
@@ -246,6 +273,36 @@ def _ast_findings(content: str) -> List[str]:
             and node not in called_names
         ):
             findings.append(f"dangerous builtin rebound: {node.id}")
+
+    # Ban __builtins__, __spec__, and __loader__ as bare names.
+    # ``__builtins__.eval(...)`` bypasses the _BANNED_CALL_NAMES check because
+    # it is an Attribute call, not a Name call. Plain ``builtins`` is caught via
+    # the import ban in _DANGEROUS_IMPORTED_NAMES, so it cannot be bound as a bare
+    # name unless injected at module level (outside this validator's scope).
+    # ``__spec__`` and ``__loader__`` exist in the module namespace and reach the
+    # module loader.
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id in {"__builtins__", "__spec__", "__loader__"}:
+            if isinstance(node.ctx, ast.Load):
+                # Allow __spec__ in benign comparison: __spec__ is None
+                if node.id == "__spec__":
+                    parent = parent_map.get(node)
+                    if isinstance(parent, ast.Compare):
+                        # Check if this is __spec__ is/is not None
+                        if (parent.left == node and
+                            all(isinstance(op, (ast.Is, ast.IsNot)) for op in parent.ops) and
+                            all(isinstance(c, ast.Constant) and c.value is None 
+                                for c in parent.comparators)):
+                            continue  # Benign use, skip the finding
+                findings.append(f"dangerous builtin name: {node.id}")
+
+    # Ban "__builtins__" as string literal keys in subscripts.
+    # ``vars()["__builtins__"]`` and ``globals()["__builtins__"]`` both reach
+    # the builtins namespace indirectly.
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Subscript):
+            if isinstance(node.slice, ast.Constant) and node.slice.value in _BANNED_STRING_KEYS:
+                findings.append(f'dangerous subscript key: ["{node.slice.value}"]')
 
     # ``case C(system=f)`` makes CPython run ``getattr(subject, "system")``, but
     # the name is a plain str in ``MatchClass.kwd_attrs``, so none of the
@@ -307,6 +364,25 @@ def _ast_findings(content: str) -> List[str]:
                     findings.append(
                         f"descriptor lookup on a builtin base: {fn.id}({root})"
                     )
+                # Also check for string literal 2nd arg: getattr(x, "__self__")
+                if fn.id in _ATTR_LOOKUP_NAMES and len(node.args) >= 2:
+                    if isinstance(node.args[1], ast.Constant):
+                        attr_name = node.args[1].value
+                        if isinstance(attr_name, str):
+                            if attr_name in _DANGEROUS_ATTRS_ANY_BASE:
+                                findings.append(
+                                    f"dangerous attribute lookup: {fn.id}(..., {attr_name!r})"
+                                )
+                            elif attr_name == "modules" and root == "sys":
+                                findings.append(
+                                    f"dangerous module lookup: getattr(sys, 'modules')"
+                                )
+            elif isinstance(fn, ast.Attribute) and fn.attr == "get" and node.args:
+                # .get("__builtins__") and similar dict.get() calls bypass subscript check
+                if isinstance(node.args[0], ast.Constant):
+                    key = node.args[0].value
+                    if isinstance(key, str) and key in _BANNED_STRING_KEYS:
+                        findings.append(f"dangerous dict key: .get({key!r})")
             elif isinstance(fn, ast.Attribute) and fn.attr in _BANNED_ATTR_CALLS:
                 findings.append(f"dangerous call: .{fn.attr}()")
             elif (
@@ -357,6 +433,31 @@ def _ast_findings(content: str) -> List[str]:
                         f"descriptor call on an unresolvable target: "
                         f"{base_desc}.{fn.attr}(...)"
                     )
+        elif isinstance(node, ast.Attribute) and node.attr in _DANGEROUS_ATTRS_ANY_BASE:
+            # Reflection attributes that are always exotic: __self__, __subclasses__,
+            # __loader__, __spec__, __globals__. No benign use in skill scripts.
+            # ``print.__self__.eval(...)`` reaches the builtins module.
+            # ``().__class__.__subclasses__()`` enables type-introspection bypasses.
+            # ``__loader__.load_module("builtins")`` reaches the module loader.
+            findings.append(f"dangerous reflection attribute: .{node.attr}")
+        elif isinstance(node, ast.Attribute) and node.attr == "modules":
+            # ``sys.modules["builtins"]`` reaches the builtins module indirectly.
+            # Allow benign uses: sys.modules.get(__name__)
+            base = node.value
+            if isinstance(base, ast.Name) and alias_map.get(base.id, base.id) == "sys":
+                # Check if this is being subscripted or called via .get()
+                parent = parent_map.get(node)
+                is_benign = False
+                if isinstance(parent, ast.Attribute) and parent.value == node and parent.attr == "get":
+                    # This is sys.modules.get - check if it's called with __name__
+                    grandparent = parent_map.get(parent)
+                    if isinstance(grandparent, ast.Call) and grandparent.func == parent:
+                        if (grandparent.args and 
+                            isinstance(grandparent.args[0], ast.Name) and
+                            grandparent.args[0].id == "__name__"):
+                            is_benign = True  # sys.modules.get(__name__) - allow it
+                if not is_benign:
+                    findings.append("dangerous module lookup: sys.modules")
         elif isinstance(node, ast.Attribute) and node.attr in _BANNED_ATTR_CALLS:
             # Catch a dangerous callable *referenced* (not just called) off a
             # dangerous module — e.g. ``f = os.remove; f(x)`` or, via an alias,
@@ -399,6 +500,7 @@ def _ast_findings(content: str) -> List[str]:
                 findings.append(f"dangerous import-from: {node.module}")
             elif root in _NETWORK_IMPORT_ROOTS:
                 findings.append(f"network egress import-from: {node.module}")
+            # Check the imported ORIGINAL name, so aliasing cannot hide it.
             for a in node.names:
                 if a.name in _DANGEROUS_IMPORTED_NAMES:
                     findings.append(f"dangerous import-from: {node.module}.{a.name}")
