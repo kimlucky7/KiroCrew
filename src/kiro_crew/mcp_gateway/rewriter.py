@@ -869,6 +869,16 @@ def _build_stub_entry(
         # 'foo_bar' still collides. The shared helper appends a digest of the RAW
         # components, which is injective, and gatewayd's reader recomputes that
         # same helper — so writer and reader can never disagree on the name.
+        #
+        # ONE FILE PER (agent, server) DECLARATION, which is what makes the
+        # file safe to hand to a connection-private backend: this file holds the
+        # declaration's full env, rotating secrets included, and two agents
+        # declaring one server with different secrets must never land on one
+        # name. Naming it after a hash that EXCLUDES those secrets would do
+        # exactly that, because ``effective_env_hash`` drops every
+        # ``AWS_SECRET``/``AWS_SESSION``/``OAUTH`` key: both agents would write
+        # one file, the second write would win, and the first agent's private
+        # backend would be spawned with the second agent's credentials.
         env_file = env_dir / env_sidecar_name(agent_name, server_name)
         # One publish path: always staged, and whoever owns the ledger commits.
         # A caller that passed none is not deferring, so a local ledger is
@@ -3025,19 +3035,33 @@ def env_sidecar_name(agent_name: str, server_name: str) -> str:
     NUL-delimited RAW components restores injectivity, so distinct
     ``(agent, server)`` pairs can never share a file.
 
+    THE AGENT STAYS IN THE NAME EVEN THOUGH IT IS NOT A POOL DIMENSION, and the
+    two facts do not conflict. This file carries one declaration's FULL env,
+    rotating secrets included, and it is read back unfiltered for a
+    connection-private backend. The pool dimension available instead,
+    ``effective_env_hash``, deliberately EXCLUDES every
+    ``AWS_SECRET``/``AWS_SESSION``/``OAUTH`` key, so two agents declaring one
+    server with the same non-secret env and different credentials hash equal:
+    naming the file after that hash would put both declarations on one name,
+    the second write would win, and the first agent's private backend would be
+    handed the second agent's credentials. One name per declaration makes that
+    substitution unrepresentable. Pool identity is unaffected either way --
+    nothing here reaches :class:`~kiro_crew.mcp_gateway.pool.PoolKey`, so two
+    agents declaring a server identically still share one backend and simply
+    read their own byte-identical copy of this file.
+
     Single source of truth for the naming rule: the rewriter writes the sidecar
-    and ``gatewayd`` reads it back by recomputing this name from the PoolKey's
-    ``agent_name``/``server_name``, so a change here moves both ends at once.
-    Sidecars written under an older naming scheme are pruned as stale by
-    ``rewrite_agents`` (it deletes any ``env/*.json`` it did not just write).
+    and ``gatewayd`` reads it back by recomputing this name from the agent its
+    Register frame named plus the PoolKey's ``server_name``, so a change here
+    moves both ends at once. Sidecars written under an older naming scheme are
+    pruned as stale by ``rewrite_agents`` (it deletes any ``env/*.json`` it did
+    not just write).
     """
 
     def _san(s: str) -> str:
         return "".join(c if (c.isalnum() or c in "_-") else "_" for c in s)
 
-    digest = hashlib.sha256(
-        f"{agent_name}\0{server_name}".encode("utf-8")
-    ).hexdigest()[:12]
+    digest = hashlib.sha256(f"{agent_name}\0{server_name}".encode("utf-8")).hexdigest()[:12]
     return f"{_san(agent_name)}.{_san(server_name)}.{digest}.json"
 
 

@@ -2108,6 +2108,8 @@ def test_a_failed_overlay_write_leaves_the_previous_generations_sidecar(
     kept = json.loads((tmp_path / "mcp-gateway" / "agents" / "agent-1.json").read_text())
     kept_flags = expand_stub_flags(kept["mcpServers"]["srv"]["args"])
     assert "--env-file" in kept_flags, "premise: the kept overlay names a sidecar"
+    kept_env_file = Path(kept_flags[kept_flags.index("--env-file") + 1])
+    assert kept_env_file == victim_sidecar, "the kept overlay moved off its own sidecar"
     assert (
         json.loads(victim_sidecar.read_text())["K"] == "old"
     ), "the kept overlay's old args now launch against the new generation's env"

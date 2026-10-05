@@ -874,6 +874,15 @@ class Backend:
     # ``len(_stub_inboxes)`` as a fast read-only integer so the idle-sweep
     # does not have to acquire the inbox lock on every pass.
     _stub_inboxes: dict[str, "asyncio.Queue[bytes]"] = field(default_factory=dict)
+    # The agent each attached stub declared on its Register frame, keyed by the
+    # same stub_uuid. ONE reader: ``_fetch_and_deliver_ui`` stamps it into the
+    # spool record so an app callback can be governed by the agent that actually
+    # produced the render (``app_call._agent_for_call``). It is per stub and not
+    # a key field because the agent is not a pool dimension (see the ``pool``
+    # module docstring), so a shared backend has several and a key field could
+    # hold none of them. Kept in step with ``_stub_inboxes`` by
+    # ``attach_stub``/``detach_stub`` under the same lock, which bounds it.
+    _stub_agents: dict[str, str] = field(default_factory=dict)
     _inbox_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     refcount: int = 0
     # Non-empty on a backend bound to a single connection, holding that
@@ -1149,11 +1158,33 @@ class Backend:
         real traffic from accumulated stragglers."""
         self.last_used_at = now if now is not None else time.monotonic()
 
-    async def attach_stub(self, stub_uuid: str) -> "asyncio.Queue[bytes]":
+    def agent_for_stub(self, stub_uuid: str) -> str:
+        """The agent ``stub_uuid`` attached under, or ``""``.
+
+        The governance identity of any app render this stub's calls produce (see
+        :meth:`_fetch_and_deliver_ui`). ``""`` is a refusing answer downstream,
+        never a default agent. A transparent respawn also reads it to carry the
+        label onto the replacement backend, which holds no Register frame of its
+        own.
+
+        Lock-free on purpose — ``dict`` reads are atomic under the one event
+        loop every mutation also runs on, and the interception path must not
+        queue behind an attach.
+        """
+        return self._stub_agents.get(stub_uuid, "")
+
+    async def attach_stub(
+        self, stub_uuid: str, *, agent: str = ""
+    ) -> "asyncio.Queue[bytes]":
         """Register ``stub_uuid`` as an active consumer of this backend.
 
         Returns a fresh inbox queue the connection handler must drain. The
         refcount bumps so the idle-sweep skips this backend.
+
+        ``agent`` is the attaching stub's declared agent, recorded for
+        :meth:`agent_for_stub`. It defaults to empty so a caller with no session
+        behind it — the ephemeral app-call stub — does not have to invent one,
+        and an empty value refuses downstream rather than widening anything.
         """
         inbox: "asyncio.Queue[bytes]" = asyncio.Queue(maxsize=_STUB_INBOX_MAXSIZE)
         async with self._inbox_lock:
@@ -1162,6 +1193,8 @@ class Backend:
                     f"stub_uuid={stub_uuid} already attached to backend pid={self.pid}"
                 )
             self._stub_inboxes[stub_uuid] = inbox
+            if agent:
+                self._stub_agents[stub_uuid] = agent
             self.refcount = len(self._stub_inboxes)
         self.touch()
         logger.debug(
@@ -1341,6 +1374,9 @@ class Backend:
         """
         async with self._inbox_lock:
             self._stub_inboxes.pop(stub_uuid, None)
+            # Under the same lock as the inbox it shadows, so a render spooled
+            # after a detach can never be stamped with a gone stub's agent.
+            self._stub_agents.pop(stub_uuid, None)
             self.refcount = len(self._stub_inboxes)
         # Bounded-table hygiene. (A replay in flight for a detached stub is
         # already handled at grant time: a replay grant is honoured only
@@ -3983,6 +4019,16 @@ class Backend:
                 "server": self.pool_key.server_name,
                 "tool": pending.tool_name,
                 "session_key": pending.session_key,
+                # GOVERNANCE IDENTITY of the callbacks this render may make, and
+                # the reason it is stamped HERE: this is gatewayd, writing an
+                # owner-only record no session can reach, and the value is the
+                # agent the producing stub declared on its Register frame over
+                # the uid socket. Both properties the app-call ceiling needs at
+                # once — per call, so a backend shared by several agents
+                # attributes each one correctly, and not writable by the agent
+                # being governed. ``""`` when the stub declared none, which
+                # ``app_call._agent_for_call`` refuses rather than defaults.
+                "agent": self.agent_for_stub(pending.stub_uuid),
                 # Exact-identity binding for the app→gateway callback: the
                 # callback resolves its backend EXCLUSIVELY by this digest, so
                 # an app can only ever call back into the same pool partition

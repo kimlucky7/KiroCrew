@@ -2228,12 +2228,11 @@ async def test_re_approving_a_running_server_keeps_its_declared_env_forwarded(
     key = type(key)(
         **{
             **{f: getattr(key, f) for f in inspect.signature(type(key)).parameters},
-            "agent_name": "a",
             "effective_env_hash": hash_effective_env(declared, identity_keys=identity_keys),
         }
     )
     assert (
-        gatewayd._declared_env_pairs(key, identity_keys) == declared
+        gatewayd._declared_env_pairs(key, identity_keys, declaring_agent="a") == declared
     ), "the next cold spawn after the toggle would start the backend without its declared env"
 
 

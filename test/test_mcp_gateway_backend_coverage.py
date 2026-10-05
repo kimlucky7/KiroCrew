@@ -95,7 +95,6 @@ def _no_real_metrics_file(monkeypatch: pytest.MonkeyPatch) -> None:
 def _pool_key(server: str = "example-mcp") -> PoolKey:
     return PoolKey(
         server_name=server,
-        agent_name="kirocrew",
         command_args_hash="cah",
         effective_env_hash="eeh",
         work_dir="/nonexistent-work-dir",
@@ -105,7 +104,6 @@ def _pool_key(server: str = "example-mcp") -> PoolKey:
         autoapprove_set_hash="aah",
         approval_mode="reads",
         trust_all_tools=False,
-        config_snapshot_hash="csh",
     )
 
 
@@ -369,6 +367,35 @@ class TestAttachDetachAndAccounting:
     async def test_detach_unknown_stub_is_noop(self) -> None:
         backend = _make_backend()
         assert await backend.detach_stub("ghost") == 0
+
+    @pytest.mark.asyncio
+    async def test_the_per_stub_agent_is_kept_per_stub_and_pruned_on_detach(self) -> None:
+        """Each attached stub's own agent, which an app render is stamped with.
+
+        Per stub and not a key field: the agent is not a pool dimension, so a
+        shared backend has one entry per attached stub and a PoolKey field could
+        hold none of them. The prune matters because the value is a governance
+        identity -- a render spooled after a detach must name no agent (which
+        refuses) rather than a gone stub's.
+        """
+        backend = _make_backend()
+        await backend.attach_stub("s1", agent="gpu-dev")
+        await backend.attach_stub("s2", agent="kirocrew")
+        assert backend.agent_for_stub("s1") == "gpu-dev"
+        assert backend.agent_for_stub("s2") == "kirocrew"
+
+        await backend.detach_stub("s2")
+        assert backend.agent_for_stub("s2") == ""
+        assert backend.agent_for_stub("s1") == "gpu-dev", "a detach took a sibling's agent"
+
+    @pytest.mark.asyncio
+    async def test_a_stub_that_declares_no_agent_records_none(self) -> None:
+        """An ephemeral app-call stub has no session behind it, so it names no
+        agent -- and ``""`` is the refusing answer downstream, never a default."""
+        backend = _make_backend()
+        await backend.attach_stub("__app_call__abc")
+        assert backend.agent_for_stub("__app_call__abc") == ""
+        assert backend.agent_for_stub("never-attached") == ""
 
     @pytest.mark.asyncio
     async def test_outstanding_work_sums_all_three_sources(self) -> None:

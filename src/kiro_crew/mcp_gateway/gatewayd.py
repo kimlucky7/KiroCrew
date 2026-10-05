@@ -51,6 +51,7 @@ _ensure_ssl_certs()
 
 import asyncio
 import contextlib
+import functools
 import logging
 import os
 import site  # noqa: F401 - tests patch user-site probing through gatewayd.site
@@ -204,11 +205,15 @@ from kiro_crew.mcp_gateway.daemon.launch import (  # noqa: F401
     TargetResolver,
     _approval_env_identity,
     _call_with_approval_snapshot,
+    _coherent_env_sidecars,
     _declared_env_for_private_backend,
+    _declared_env_launch_approved,
     _declared_env_pairs,
     _declared_env_to_forward,
     _declared_non_secret_env,
+    _env_sidecar_dir_for_config,
     _launch_approved_from_snapshot,
+    _load_env_sidecar,
     _read_declared_env_sidecar,
     _resolve_once_home,
     _resolve_target_off_loop,
@@ -905,6 +910,7 @@ async def _acquire_backend(
     resolver: TargetResolver,
     *,
     exclusive_stub_uuid: str = "",
+    declaring_agent: str = "",
     admission: Optional[Admission] = None,
     wait_deadline: Optional[float] = None,
     on_queued: Optional[OnQueued] = None,
@@ -923,6 +929,15 @@ async def _acquire_backend(
     connection alone: no reuse lookup, no pooling capacity budget, and released
     when the connection ends. ``was_spawned`` is then always ``True``, because a
     private backend has nothing to reuse by construction.
+
+    ``declaring_agent`` is the agent named on this connection's Register frame.
+    It is NOT part of pool identity -- it never reaches ``pool_key`` -- and is
+    used for exactly one thing: selecting the declared-env sidecar of a
+    connection-PRIVATE backend, the one read that returns rotating secrets
+    unfiltered (``launch._declared_env_for_private_backend``). A shared spawn
+    ignores it, because a shared backend has no single declaring agent and
+    forwards only the non-secret env every coherent sidecar agrees on. Empty
+    (a stub that names no agent) forwards nothing, which is fail-closed.
 
     ``admission`` (``None`` = ungated, the shape unit tests use) is the
     daemon's :class:`Admission`. With it, a REAL spawn takes, in this order and
@@ -1040,14 +1055,20 @@ async def _acquire_backend(
         # the flag check reads config and the sidecar read touches the
         # filesystem, either of which would stall gateway traffic and heartbeat
         # processing if done inline after a config invalidation.
+        # A private backend's reader is bound to THIS connection's declaring
+        # agent, because it is the one that returns rotating secrets: it must
+        # open the sidecar this stub's own agent declared and no other. The
+        # shared reader takes no agent at all -- it forwards only the non-secret
+        # env, which every sidecar coherent with this key agrees on.
+        declared_env_reader = (
+            functools.partial(_declared_env_for_private_backend, declaring_agent=declaring_agent)
+            if exclusive_stub_uuid
+            else _declared_env_to_forward
+        )
         declared = dict(
             await asyncio.to_thread(
                 _call_with_approval_snapshot,
-                (
-                    _declared_env_for_private_backend
-                    if exclusive_stub_uuid
-                    else _declared_env_to_forward
-                ),
+                declared_env_reader,
                 pool_key,
                 approval_snapshot,
             )

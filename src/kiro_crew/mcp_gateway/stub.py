@@ -780,6 +780,21 @@ def build_register_payload(args: argparse.Namespace) -> dict:
         "type": "register",
         "stub_uuid": str(uuid.uuid4()),
         "server_name": args.server,
+        # NOT a pool dimension — the agent name never reaches the backend
+        # process, so two agents declaring one server identically share it (see
+        # the ``pool`` module docstring). LOAD-BEARING ANYWAY, and this list is
+        # what a future removal has to answer to. A daemon reads it off the
+        # frame (``daemon.connection``'s ``stub_agent``) for three things:
+        #   * a daemon predating the pool-dimension removal runs a
+        #     ``PoolKey.from_register`` that hard-requires the key and would
+        #     reject every new stub as malformed;
+        #   * it names the declared-env sidecar a connection-PRIVATE backend
+        #     reads (``daemon.launch._read_declared_env_sidecar``), so dropping
+        #     it would start such a backend with no declared env; and
+        #   * it is stamped into an intercepted app render's spool record
+        #     (``Backend.agent_for_stub`` -> ``backend._fetch_and_deliver_ui``),
+        #     which is the governance identity of that render's callbacks, so
+        #     dropping it would have every app callback refused.
         "agent_name": args.agent,
         "command_args_hash": hash_command(args.target_command, target_args),
         "effective_env_hash": hash_effective_env(env_pairs, identity_keys=identity_keys),
@@ -814,6 +829,10 @@ def build_register_payload(args: argparse.Namespace) -> dict:
         # the key. Safe to drop once no daemon predating the key can be adopted.
         "user_identity": caller["principal_id"] or "unknown",
         "channel_id": channel_id,
+        # Wire-compat ballast on the same terms as ``user_identity`` above, and
+        # inert from the start: this has always been a constant run of 64 zeros,
+        # so it never partitioned anything. Deleted as a pool dimension; still
+        # sent so a daemon predating the deletion keeps accepting this register.
         "config_snapshot_hash": _CONFIG_SNAPSHOT_PLACEHOLDER,
         "caller": caller,
         # Claim-push (gateway → gatewayd ``claim`` frame): the ancestor PID
