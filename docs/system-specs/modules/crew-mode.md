@@ -724,14 +724,29 @@ using V1; member updates never initialize a V2 database. Global and named V1
 contents remain untouched. Config fields, exclusive database creation, immutable database identity and
 recovery semantics are owned by [config](config.md#named-memory-stores-memory_storespy).
 
-A new member DM inherits the member's configured workspace, falling back to
-`default_workspace` when that name is undeclared. Its project directory uses the
-shared `default_project_dir` validation, so provider cwd and project essentials
-refer to the same workspace. Resolution finishes before publishing the slot;
-the first slot broadcast includes its project directory. A concurrent opener's
-existing slot is preserved. Reopening a live or restored
-thread keeps its saved workspace and project, including an explicitly empty
-project, rather than resetting a session choice to the member default.
+A member DM has no project concept. The slot's `project` field is only where
+the dashboard (Files tab, terminal cwd, project essentials) and the provider
+cwd read a directory from, and for a member thread that directory IS the
+member's configured workspace, falling back to `default_workspace` when that
+name is undeclared, through the shared `default_project_dir` validation. It is
+derived from the crew's binding in config on EVERY open of
+`POST /api/members/{slug}/thread` (the only creator and repairer of member
+slots), never a per-thread choice read back from the transcript: a fresh mint
+resolves before publishing the slot, so the first slot broadcast carries the
+directory, and a live or rehydrated thread is re-pointed at the binding (off
+the event loop; compare-and-set, so an already-bound thread is neither
+re-marked dirty nor re-pushed; a changed binding reaches disk through the
+periodic flush and the client through a push). This is what makes a thread
+written before member slots carried the directory -- restored with an empty
+`project`, so its pinned Files tab read "no project directory" -- converge on
+the right one, and what makes a crew whose binding is later edited follow it.
+When the directory actually changes on a thread that already had one, the open
+arms the deferred provider reset every other `slot.project` writer arms: a warm
+provider keeps the cwd it was spawned in, the reset never tears down an active
+turn, and the next message cold-starts in the new directory. An unresolvable
+binding (workspace directory missing or fenced) leaves the thread as it is
+rather than clearing a directory the user can see. A concurrent opener's
+existing slot is preserved; both openers derive the same binding.
 
 A newly created V2 member starts a fresh conversation. Existing V1 conversation
 and native provider context cannot acquire member memory by changing a label.

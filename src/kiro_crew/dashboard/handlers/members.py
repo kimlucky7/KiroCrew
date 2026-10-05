@@ -885,6 +885,64 @@ def _member_thread_slot(cfg, member: str, slug: str) -> tuple[str, str]:
     return members_mod.member_slot_key(slug, store), store
 
 
+def _member_workspace_project(cfg: KiroCrewConfig, member: str) -> tuple[str, str]:
+    """Resolve a crew member's bound workspace: ``(workspace name, project dir)``.
+
+    The member's ``workspace`` name, falling back to ``default_workspace`` when
+    that name is undeclared, through the shared ``default_project_dir``
+    validation -- so provider cwd and project essentials refer to the same
+    directory. Blocking filesystem IO (realpath, isdir, sensitive-path fence):
+    callers run it off the event loop.
+    """
+    member_workspace = cfg.agents[member].workspace
+    if member_workspace not in cfg.workspaces:
+        member_workspace = cfg.default_workspace
+    return member_workspace, default_project_dir(member_workspace)
+
+
+async def _bind_member_workspace(
+    state: DashboardState, slot: Any, cfg: KiroCrewConfig, member: str
+) -> None:
+    """Point a member thread at its crew's configured workspace.
+
+    A member chat has no project concept. The slot's ``project`` field is
+    where the dashboard (Files tab, terminal cwd, project essentials) and the
+    provider cwd read a directory from, and for a member thread that directory
+    IS the workspace the crew is bound to in ``agents.<name>.workspace`` --
+    derived from config on every open, never a per-thread choice read back
+    from the transcript. That is what makes a thread written before member
+    slots carried the directory (restored with ``project == ""``, so the
+    pinned Files tab read "no project directory") converge on the right one,
+    and what makes a crew whose binding was later edited follow it.
+
+    Resolution runs off the event loop; the write is a compare-and-set so an
+    already-bound slot is not re-marked dirty, and a changed binding reaches
+    disk through the next periodic flush and the client through a push. When
+    the directory actually CHANGES on a thread that already had one, the
+    deferred provider reset is armed exactly as every other writer of
+    ``slot.project`` arms it (``_set_project``, ``api_chat_slot_project``): a
+    warm kiro-cli process keeps the cwd it was spawned in, so without the reset
+    the agent would keep writing files in the old directory while the Files
+    tab shows the new one. The reset is deferred, so an active turn is never
+    torn down; the next message cold-starts in the new directory.
+    """
+    member_workspace, project = await asyncio.to_thread(_member_workspace_project, cfg, member)
+    if not project:
+        # The workspace directory is missing or fenced: nothing to point at.
+        # ``default_project_dir`` already logged the fall-through; leave the
+        # thread as it is rather than clearing a directory the user can see.
+        return
+    if slot.workspace == member_workspace and slot.project == project:
+        return
+    old_project = slot.project
+    slot.workspace = member_workspace
+    slot.project = project
+    if old_project and old_project != project:
+        slot._pending_reset_history_key = effective_session_key(slot)
+    slot._dirty = True
+    state.push_slots_update()
+
+
 async def api_member_thread(request: web.Request) -> web.Response:
     """POST /api/members/{slug}/thread — idempotent get-or-create of a DM thread.
 
@@ -1032,15 +1090,17 @@ async def api_member_thread(request: web.Request) -> web.Response:
         # adopt_closed: this endpoint IS the deliberate reopen path for a
         # member thread, so a ✕-closed transcript reopens with its history.
         slot = await rehydrate_slot_from_history_async(state, slot_key, adopt_closed=True)
+    minted = False
     if slot is None:
-        member_workspace = cfg.agents[member_name].workspace
-        if member_workspace not in cfg.workspaces:
-            member_workspace = cfg.default_workspace
-        project = await asyncio.to_thread(default_project_dir, member_workspace)
+        member_workspace, project = await asyncio.to_thread(
+            _member_workspace_project, cfg, member_name
+        )
         # Resolve before publication, then re-check: another opener can create
-        # the slot while path validation waits. Its project remains its choice.
+        # the slot while path validation waits; that slot is kept and bound to
+        # the same workspace below (both openers derive it from one config).
         slot = state._slots.get(slot_key)
         if slot is None:
+            minted = True
             with state.suspend_slots_push():
                 slot = state.get_or_create_slot(
                     name=slot_key,
@@ -1091,6 +1151,11 @@ async def api_member_thread(request: web.Request) -> web.Response:
             },
             status=409,
         )
+
+    if not minted:
+        # Live (restart-restored) and rehydrated threads alike: the fresh mint
+        # above already carries the binding, every other path converges here.
+        await _bind_member_workspace(state, slot, cfg, member_name)
 
     member_store = getattr(cfg.agents[member_name], "memory_store", "")
     store_record = cfg.memory_stores.get(member_store) if member_store else None
