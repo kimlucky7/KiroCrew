@@ -233,6 +233,9 @@ _GIT_ENV_NEUTRALIZERS: dict[str, str] = {
     # not own.
     "GIT_CONFIG_KEY_8": "log.showSignature",
     "GIT_CONFIG_VALUE_8": "false",
+    # A git status spawns a subprocess inside submodules to check their content;
+    # that subprocess reads the submodule's own .git/config. With dirty, git only
+    # compares commit SHAs and never runs a subprocess in the submodule.
 }
 
 # The credential.helper reset above kills repo-injected helpers (the attack
