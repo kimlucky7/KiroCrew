@@ -9,6 +9,9 @@ protocol error. The gate validates answer domains again before anything is
 consumed. Transport and protocol failures raise; the gate supplies fallback, not
 retries.
 
+The same client serves Cloudflare's Clef decision model on Workers AI, which speaks
+this format inside a ``result`` envelope that ``_from_wire`` unwraps.
+
 The same client serves a local System One server (``decisions/local_models.py``):
 an endpoint on a literal loopback address is sent no credential at all.
 """
@@ -180,6 +183,8 @@ def _from_wire(body: Any, questions: list[Question]) -> Answers:
         raise JevProtocolError("response is not an object")
     raw_answers = body.get("answers")
     if not isinstance(raw_answers, dict):
+        raw_answers = _unwrap_envelope(body)
+    if not isinstance(raw_answers, dict):
         raise JevProtocolError("response has no 'answers' object")
     answers: Answers = {}
     for q in questions:
@@ -188,6 +193,24 @@ def _from_wire(body: Any, questions: list[Question]) -> Answers:
             raise JevProtocolError("no answer for question")
         answers[q.id] = _answer_from_wire(q, raw)
     return answers
+
+
+def _unwrap_envelope(body: dict) -> Any:
+    """The ``answers`` inside Cloudflare's Workers AI REST envelope, else ``None``.
+
+    Cloudflare serves the same System One format as Jev but wraps it:
+    ``{"result": {"model", "answers", "usage"}, "success": true, "errors": [], ...}``.
+    Only a body with NO top-level ``answers`` object and a ``result`` object is read
+    this way, so the shape Jev itself sends is untouched. A ``success`` that is not
+    exactly ``true`` is a refusal: the envelope is the provider saying it failed, and
+    its ``errors`` text is never read, since error text could echo the request.
+    """
+    result = body.get("result")
+    if not isinstance(result, dict):
+        return None
+    if "success" in body and body["success"] is not True:
+        raise JevProtocolError("response envelope reports failure")
+    return result.get("answers")
 
 
 def _answer_from_wire(q: Question, raw: dict) -> Answer:

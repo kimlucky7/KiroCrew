@@ -762,3 +762,123 @@ class TestNoulAndScoreParse:
         rec = _Recorder(body=_ok_body({"is_urgent": {"type": "noul", "noul": 0.9}}))
         with pytest.raises(JevProtocolError, match="no answer for question"):
             asyncio.run(_run(rec, [IS_URGENT, FRUSTRATION, CHOICE]))
+
+
+# ---------------------------------------------------------------------------
+# Cloudflare Workers AI envelope (Clef)
+# ---------------------------------------------------------------------------
+
+
+def _cf_envelope(answers, *, success=True, model="clef-flash"):
+    """The body Cloudflare's REST endpoint returns around a System One response."""
+    return {
+        "result": {"model": model, "answers": answers, "usage": {"input_tokens": 312}},
+        "success": success,
+        "errors": [],
+        "messages": [],
+    }
+
+
+class TestCloudflareEnvelope:
+    def test_a_wrapped_success_parses_like_the_unwrapped_shape(self):
+        rec = _Recorder(body=_cf_envelope({"is_urgent": _yes(0.92)}))
+        answer = asyncio.run(_run(rec, [URGENT], model="clef-flash"))["is_urgent"]
+        assert answer.value == "yes"
+        assert answer.p == pytest.approx(0.92)
+        assert rec.requests[0]["model"] == "clef-flash", "the model id goes out unchanged"
+
+    def test_a_wrapped_mixed_request_parses_every_type(self):
+        answers = {
+            "department": {
+                "type": "choice",
+                "choice": "billing",
+                "probabilities": {"billing": 0.8, "technical": 0.1, "sales": 0.1},
+            },
+            "frustration": _score_body(),
+            "is_urgent": {"type": "noul", "noul": 0.25},
+        }
+        rec = _Recorder(body=_cf_envelope(answers))
+        got = asyncio.run(_run(rec, [CHOICE, FRUSTRATION, IS_URGENT], model="clef"))
+        assert got["department"].value == "billing"
+        assert got["frustration"].value == pytest.approx(1.05)
+        assert got["is_urgent"].value == pytest.approx(0.25)
+        assert got["is_urgent"].p == pytest.approx(0.75)
+
+    @pytest.mark.parametrize("success", [False, None, "true", 1, 0])
+    def test_a_wrapped_body_whose_success_is_not_true_is_refused(self, success):
+        rec = _Recorder(body=_cf_envelope({"is_urgent": _yes(0.9)}, success=success))
+        with pytest.raises(JevProtocolError, match="reports failure"):
+            asyncio.run(_run(rec, [URGENT], model="clef-flash"))
+
+    def test_a_failed_envelope_never_echoes_provider_text(self):
+        body = {
+            "result": None,
+            "success": False,
+            "errors": [{"code": 10000, "message": "secret-state-echo"}],
+            "messages": [],
+        }
+        rec = _Recorder(body=body)
+        with pytest.raises(JevProtocolError) as caught:
+            asyncio.run(_run(rec, [URGENT], model="clef-flash"))
+        assert "secret-state-echo" not in str(caught.value)
+
+    def test_a_failure_envelope_with_a_result_object_still_refuses_and_echoes_nothing(self):
+        body = _cf_envelope({"is_urgent": _yes(0.9)}, success=False)
+        body["errors"] = [{"code": 1, "message": "secret-state-echo"}]
+        rec = _Recorder(body=body)
+        with pytest.raises(JevProtocolError) as caught:
+            asyncio.run(_run(rec, [URGENT], model="clef-flash"))
+        assert "secret-state-echo" not in str(caught.value)
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {"result": {"model": "clef-flash"}, "success": True},
+            {"result": {"answers": []}, "success": True},
+            {"result": {"answers": None}, "success": True},
+            {"result": [], "success": True},
+            {"result": "x", "success": True},
+            {"success": True},
+        ],
+        ids=[
+            "no-answers",
+            "answers-list",
+            "answers-null",
+            "result-list",
+            "result-str",
+            "no-result",
+        ],
+    )
+    def test_an_envelope_without_an_answers_object_is_refused(self, body):
+        rec = _Recorder(body=body)
+        with pytest.raises(JevProtocolError, match="no 'answers' object"):
+            asyncio.run(_run(rec, [URGENT], model="clef-flash"))
+
+    def test_the_unwrapped_jev_shape_is_unchanged(self):
+        rec = _Recorder(body=_ok_body({"is_urgent": _yes(0.4)}))
+        assert asyncio.run(_run(rec, [URGENT]))["is_urgent"].p == pytest.approx(0.4)
+
+    def test_a_top_level_answers_object_wins_over_a_result_sibling(self):
+        """Jev's own shape is read first, so a stray ``result`` key cannot redirect it."""
+        body = _ok_body({"is_urgent": _yes(0.4)})
+        body["result"] = {"answers": {"is_urgent": _yes(0.99)}}
+        body["success"] = False
+        rec = _Recorder(body=body)
+        assert asyncio.run(_run(rec, [URGENT]))["is_urgent"].p == pytest.approx(0.4)
+
+    def test_answers_are_still_validated_strictly_inside_the_envelope(self):
+        rec = _Recorder(body=_cf_envelope({"is_urgent": {"type": "noul", "noul": 0.9}}))
+        with pytest.raises(JevProtocolError, match="type does not match"):
+            asyncio.run(_run(rec, [URGENT], model="clef-flash"))
+
+    def test_an_unanswered_question_inside_the_envelope_is_still_a_failure(self):
+        rec = _Recorder(body=_cf_envelope({"is_urgent": _yes(0.5)}))
+        with pytest.raises(JevProtocolError, match="no answer for question"):
+            asyncio.run(_run(rec, [URGENT, CHOICE], model="clef-flash"))
+
+    @pytest.mark.parametrize("model", ["clef", "clef-flash"])
+    def test_the_clef_model_ids_are_valid_wire_model_ids(self, model):
+        from kiro_crew.decisions.types import is_model_id
+
+        assert is_model_id(model)
+        assert _to_wire("hi", model, [URGENT])["model"] == model
