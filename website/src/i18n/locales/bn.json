@@ -10014,7 +10014,7 @@
       "copy_content": "বিষয়বস্তু কপি করুন",
       "send_to_session": "কোনো সেশনে পাঠান",
       "send_to_new_session": "নতুন সেশন",
-      "send_to_session_failed": "সেশন শুরু করা যায়নি — আবার চেষ্টা করুন",
+      "send_to_session_failed": "সেশন শুরু করা যায়নি — আবার চেষ্টা করো",
       "untitled_session": "শিরোনামহীন সেশন",
       "copy_failed": "কপি ব্যর্থ",
       "could_not_overwrite": "ওভাররাইট করা যায়নি।",

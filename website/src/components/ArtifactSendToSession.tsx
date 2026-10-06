@@ -10,21 +10,14 @@ import { loadDrafts, mergeIntoDraft } from '../utils/chatDrafts'
 import type { NavIntent } from '../utils/popoutController'
 import type { ChatSlot } from '../types'
 import { i18nT } from '../i18n/t'
+import { errMessage } from '../utils/thunkError'
+import { Btn } from './ui'
+import { artifactReferencePrompt } from './artifactReference.prompt'
 
 /** How many live sessions the menu lists. The menu is a quick hand-off, not a
  *  session browser — the sidebar and the command palette own the long tail. */
 const MAX_LISTED_SESSIONS = 10
 
-/**
- * The text a hand-off seeds the target composer with. Addressed to the agent,
- * so it names the slug (the handle `artifact_get` takes) rather than relying on
- * the title, which is neither unique nor stable. Kept in English like the
- * page's other agent-addressed prompts: the agent reads it, and the user can
- * edit it before sending.
- */
-export function artifactReferencePrompt(name: string, slug: string): string {
-  return `Reference artifact "${name}" (slug \`${slug}\`; load it with artifact_get).`
-}
 
 /**
  * Toolbar control on the artifact page: drop a reference to this artifact into
@@ -34,18 +27,23 @@ export function artifactReferencePrompt(name: string, slug: string): string {
  * rather than replacing it: the prefill consumer overwrites the composer, so an
  * unmerged seed would silently destroy text the user had typed there.
  */
-export function ArtifactSendToSession({ name, slug, onSend, className }: {
+export function ArtifactSendToSession({ name, slug, onSend, beforeSend, onError, className }: {
   name: string
   slug: string
   /** The page's navigation dispatcher, so a popout window forwards the
    *  hand-off to the main dashboard instead of navigating in place. */
   onSend: (intent: NavIntent) => void
+  /** Runs the hand-off only once the page agrees to leave (e.g. the unsaved
+   *  comment-draft prompt). It wraps session CREATION too, so cancelling the
+   *  prompt never leaves an empty session nothing opens. */
+  beforeSend: (proceed: () => void | Promise<void>) => void
+  /** Failure text for the page's ErrorNotice stack, or `null` to clear it. */
+  onError: (message: string | null) => void
   className?: string
 }) {
   const dispatch = useAppDispatch()
   const slots = useAppSelector((s) => s.dashboard.slots)
   const [creating, setCreating] = useState(false)
-  const [error, setError] = useState(false)
 
   // Live sessions, most recent first. Sessions bound to an artifact are that
   // artifact's companion chat (this page's own lives behind the chat toggle),
@@ -62,42 +60,40 @@ export function ArtifactSendToSession({ name, slug, onSend, className }: {
   }
   const handOffToNew = async () => {
     setCreating(true)
-    setError(false)
+    onError(null)
     try {
       const slot = await dispatch(createSlot({ activate: false })).unwrap()
       handOff(slot.key)
-    } catch {
-      setError(true)
+    } catch (e) {
+      onError(errMessage(e) || i18nT('components.errorBoundary.something_went_wrong'))
     } finally {
       setCreating(false)
     }
   }
 
-  const label = error
-    ? i18nT('pages.artifactDetailPage.send_to_session_failed')
-    : i18nT('pages.artifactDetailPage.send_to_session')
+  const label = i18nT('pages.artifactDetailPage.send_to_session')
   return (
     <DropdownMenu>
       <HoverTip label={label}>
         <DropdownMenuTrigger asChild>
-          <button
+          <Btn
             type="button"
             disabled={creating}
-            className={className ?? `p-1.5 rounded-md border border-border cursor-pointer transition-all disabled:opacity-40 ${error ? 'text-danger hover:text-danger' : 'text-muted hover:text-text hover:border-border-strong'}`}
+            className={className ?? 'p-1.5 rounded-md border border-border text-muted hover:text-text hover:border-border-strong cursor-pointer transition-all'}
             aria-label={label}
           >
             <Forward size={13} />
-          </button>
+          </Btn>
         </DropdownMenuTrigger>
       </HoverTip>
       <DropdownMenuContent align="end" className="min-w-[220px] max-w-[320px] max-h-[min(360px,var(--radix-dropdown-menu-content-available-height))]">
-        <DropdownMenuItem onSelect={() => { void handOffToNew() }}>
+        <DropdownMenuItem onSelect={() => beforeSend(handOffToNew)}>
           <Plus size={13} aria-hidden="true" />
           {i18nT('pages.artifactDetailPage.send_to_new_session')}
         </DropdownMenuItem>
         {listed.length > 0 && <DropdownMenuSeparator />}
         {listed.map((s) => (
-          <DropdownMenuItem key={s.key} onSelect={() => handOff(s.key)}>
+          <DropdownMenuItem key={s.key} onSelect={() => beforeSend(() => handOff(s.key))}>
             <span className="truncate">{s.title || i18nT('pages.artifactDetailPage.untitled_session')}</span>
           </DropdownMenuItem>
         ))}

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { screen, fireEvent, waitFor } from '@testing-library/react'
-import { ArtifactSendToSession, artifactReferencePrompt } from '../components/ArtifactSendToSession'
+import { ArtifactSendToSession } from '../components/ArtifactSendToSession'
+import { artifactReferencePrompt } from '../components/artifactReference.prompt'
 import { renderWithProviders, createTestStore } from './helpers'
 import { fetchSlots } from '../store/dashboardSlice'
 import { api } from '../api/client'
@@ -13,12 +14,16 @@ const slot = (key: string, title: string, extra: Partial<ChatSlot> = {}): ChatSl
   key, title, messages: 3, running: false, last_activity_ts: '2026-10-05T12:00:00Z', ...extra,
 })
 
-function setup(slots: ChatSlot[]) {
+function setup(slots: ChatSlot[], beforeSend: (proceed: () => void | Promise<void>) => void = (p) => { void p() }) {
   const store = createTestStore()
   store.dispatch(fetchSlots.fulfilled(slots, 'req'))
   const onSend = vi.fn()
-  renderWithProviders(<ArtifactSendToSession name="CR Queue" slug="cr-queue" onSend={onSend} />, { store })
-  return { onSend }
+  const onError = vi.fn()
+  renderWithProviders(
+    <ArtifactSendToSession name="CR Queue" slug="cr-queue" onSend={onSend} beforeSend={beforeSend} onError={onError} />,
+    { store },
+  )
+  return { onSend, onError }
 }
 
 const openMenu = () => fireEvent.pointerDown(
@@ -72,12 +77,24 @@ describe('ArtifactSendToSession', () => {
     })
   })
 
-  it('says so on the control when the new session cannot be created', async () => {
+  it('reports a failed create to the page instead of handing off', async () => {
     vi.mocked(api).createChatSlot = vi.fn().mockRejectedValue(new Error('boom'))
-    const { onSend } = setup([])
+    const { onSend, onError } = setup([])
     openMenu()
     fireEvent.click(await screen.findByRole('menuitem', { name: 'New session' }))
-    expect(await screen.findByRole('button', { name: /Could not start a session/ })).toBeInTheDocument()
+    await waitFor(() => expect(onError).toHaveBeenLastCalledWith('boom'))
+    expect(onSend).not.toHaveBeenCalled()
+  })
+
+  it('creates no session when the page declines to leave', async () => {
+    const create = vi.fn().mockResolvedValue({ key: 'chat-new' })
+    vi.mocked(api).createChatSlot = create
+    // The comment-draft prompt answered "keep": proceed is never run.
+    const { onSend } = setup([], () => {})
+    openMenu()
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'New session' }))
+    await new Promise((r) => setTimeout(r, 0))
+    expect(create).not.toHaveBeenCalled()
     expect(onSend).not.toHaveBeenCalled()
   })
 })

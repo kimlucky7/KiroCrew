@@ -1584,7 +1584,10 @@ Picking one navigates there through the page's `sendNav` and appends a one-line
 reference (`Reference artifact "<name>" (slug \`<slug>\`; load it with
 artifact_get).`) to that session's composer draft with `mergeIntoDraft`, so an
 unsent draft is kept. Nothing is sent: the user reviews and submits. The menu is
-hidden while editing, because navigating away would drop unsaved edits.
+hidden while editing, because navigating away would drop unsaved edits. The
+unsaved-comment-draft prompt runs before anything else, including creating the
+new session, so cancelling it never leaves an empty session behind. A failed
+create shows as an `ErrorNotice` on the page, since the menu has already closed.
 
 **Session resolution (frontend)** — the active bound session is resolved from
 the Redux slots snapshot (`slot.artifact === slug`), so no extra endpoint exists:

@@ -398,6 +398,7 @@ export default function ArtifactDetailPage({ popout = false }: { popout?: boolea
   const [editedContent, setEditedContent] = useState('')
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [sendToSessionError, setSendToSessionError] = useState<string | null>(null)
   const [showPublish, setShowPublish] = useState(false)
   // Tag editing: tags shown in the header are editable inline. Adding a tag
   // posts metadata-only (no version bump). Removing a tag works the same way.
@@ -1831,7 +1832,10 @@ export default function ArtifactDetailPage({ popout = false }: { popout?: boolea
           )}
           {artifact.tags.map((t) => (
             <span key={t} className={`${TOOLBAR_CHIP_CLASS} bg-bg-elevated border border-border text-muted group`}>
-              {t}
+              {/* Own element: the remove button's HoverTip keeps an sr-only copy of
+                  its label in this chip, so the bare text node would no longer be
+                  the chip's whole text. */}
+              <span>{t}</span>
               <HoverTip label={i18nT('pages.artifactDetailPage.remove_tag', { name: t })}>
                 <button
                   type="button"
@@ -2071,7 +2075,7 @@ export default function ArtifactDetailPage({ popout = false }: { popout?: boolea
                 surface, since leaving for a chat would discard the buffer. */}
             {artifact.kind !== 'webapp' && artifact.kind !== 'image' && !editing && (
               <HoverTip label={copyLabel}>
-                <button
+                <Btn
                   type="button"
                   onClick={handleCopyContent}
                   className={`p-1.5 rounded-md border border-border hover:border-border-strong cursor-pointer transition-all ${copyStatus === 'failed' ? 'text-danger hover:text-danger' : 'text-muted hover:text-text'}`}
@@ -2083,14 +2087,16 @@ export default function ArtifactDetailPage({ popout = false }: { popout?: boolea
                     : copyStatus === 'failed'
                       ? <AlertCircle size={13} aria-hidden="true" />
                       : <Copy size={13} />}
-                </button>
+                </Btn>
               </HoverTip>
             )}
             {!editing && (
               <ArtifactSendToSession
                 name={artifact.name}
                 slug={artifact.slug}
-                onSend={(intent) => { void guardCommentDraft(() => sendNav(intent)) }}
+                onSend={sendNav}
+                beforeSend={(proceed) => { void guardCommentDraft(proceed) }}
+                onError={setSendToSessionError}
               />
             )}
             {/* Publish — the single publish surface. Web deploy (Publish to
@@ -2161,6 +2167,16 @@ export default function ArtifactDetailPage({ popout = false }: { popout?: boolea
         <ErrorNotice
           message={saveError}
           title={i18nT('pages.artifactDetailPage.save_failed')}
+          className="mb-3"
+        />
+
+        {/* A failed "New session" hand-off. Not hidden in the trigger's tooltip:
+            the menu has closed by the time the create rejects, so this is the
+            only place the failure is readable. */}
+        <ErrorNotice
+          message={sendToSessionError}
+          title={i18nT('pages.artifactDetailPage.send_to_session_failed')}
+          onDismiss={() => setSendToSessionError(null)}
           className="mb-3"
         />
 
