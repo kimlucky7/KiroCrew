@@ -9286,6 +9286,16 @@
     "theme": {
       "high_contrast": "🔆 高コントラスト"
     },
+    "useCloseSessionTree": {
+      "body": "このセッションの配下でまだ実行中：{{descendants}} 件のうち {{running}} 件。閉じると進行中の作業が取り消され、元に戻せません。",
+      "body_idle": "このセッションを閉じると、その配下にネストされたものもすべて閉じます：さらに {{descendants}} 件。",
+      "confirm": "すべて閉じる（{{number}}）",
+      "finished": "完了",
+      "level": "レベル {{depth}}",
+      "level_self": "このセッション",
+      "running": "実行中",
+      "title": "このセッションとその配下すべてを閉じますか？"
+    },
     "useCronActions": {
       "failed_to_cancel_job": "ジョブのキャンセルに失敗しました",
       "failed_to_pause_job": "ジョブを一時停止できませんでした",

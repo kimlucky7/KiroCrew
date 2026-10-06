@@ -109,6 +109,18 @@ describe('SessionActionsMenu', () => {
     expect(actions.close).toHaveBeenCalledWith('zzq-slot')
   })
 
+  it('lets the session tree own Close, so the menu cannot be the quieter answer', () => {
+    // The tree's ✕ closes the card AND the sessions under it, asking first when
+    // that destroys running work. This menu sits on the same card — and on a phone
+    // it is the card's ONLY close control — so a surface that passes `onClose`
+    // takes the connected single-session close out of the picture entirely.
+    const onClose = vi.fn()
+    setup({ onClose })
+    fireEvent.click(btn('Close session'))
+    expect(onClose).toHaveBeenCalledWith('zzq-slot')
+    expect(actions.close).not.toHaveBeenCalled()
+  })
+
   it('wires Reload session to the slot and disables it while a turn runs', () => {
     const { unmount } = setup()
     fireEvent.click(btn('Reload session'))

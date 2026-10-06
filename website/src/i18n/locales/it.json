@@ -9538,6 +9538,16 @@
     "theme": {
       "high_contrast": "🔆 Contrasto elevato"
     },
+    "useCloseSessionTree": {
+      "body": "Ancora in esecuzione sotto questa sessione: {{running}} su {{descendants}}. La chiusura annulla il loro lavoro in corso, e non si può annullare.",
+      "body_idle": "Chiudere questa sessione chiude anche tutto ciò che è annidato sotto: altre {{descendants}}.",
+      "confirm": "Chiudi tutte ({{number}})",
+      "finished": "Completata",
+      "level": "Livello {{depth}}",
+      "level_self": "Questa sessione",
+      "running": "In esecuzione",
+      "title": "Chiudere questa sessione e tutto ciò che sta sotto?"
+    },
     "useCronActions": {
       "failed_to_cancel_job": "Impossibile annullare il job",
       "failed_to_pause_job": "Impossibile mettere in pausa il job",

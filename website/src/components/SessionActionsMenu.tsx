@@ -64,6 +64,18 @@ export interface SessionActionsMenuProps {
   /** Called after a colour pick; lets a caller that controls its own menu close it (the header does). */
   onColorPicked?: () => void
   /**
+   * Replace the Close item's action. The only caller that passes it is the session
+   * tree, whose ✕ closes the card AND the sessions nested under it (#17253): the
+   * menu sits next to that ✕ on the same card, and on a phone it IS the only close
+   * affordance, so a menu that closed one session there would be a second, quieter
+   * answer to the same question.
+   *
+   * A bubble prop rather than something internalised, because the subtree is only
+   * knowable where the lineage is: the chat header and a popped-out window have no
+   * tree on screen and keep the connected single-session close.
+   */
+  onClose?: (slotKey: string) => void
+  /**
    * Whether the chat sidebar -- and with it the banner that says a failed
    * folder-order read -- is on screen while this menu is open. The sidebar's
    * own row menus pass `true`; the chat header passes the drawer's state, which
@@ -122,7 +134,7 @@ export function collapseGroups<T>(groups: (T | false | null | undefined)[][]): T
  *   [close]          Close session
  */
 export default function SessionActionsMenu({
-  variant, slotKey, mode, onReveal, onRename, onAutoTitle, onOpenInNewTab, onDuplicate, infoSlots, onColorPicked, sidebarOnScreen = false, omitPopout = false,
+  variant, slotKey, mode, onReveal, onRename, onAutoTitle, onOpenInNewTab, onDuplicate, infoSlots, onColorPicked, onClose, sidebarOnScreen = false, omitPopout = false,
 }: SessionActionsMenuProps) {
   const Item = variant === 'context' ? ContextMenuItem : DropdownMenuItem
   const Separator = variant === 'context' ? ContextMenuSeparator : DropdownMenuSeparator
@@ -363,7 +375,7 @@ export default function SessionActionsMenu({
     ],
     // Close session — terminal, destructive
     [
-      <Item key="close" className="text-danger focus:text-danger" onSelect={() => close(slotKey)}>
+      <Item key="close" className="text-danger focus:text-danger" onSelect={() => (onClose ?? close)(slotKey)}>
         <X size={13} /> {i18nT('components.sessionActionsMenu.close_session')}
       </Item>,
     ],

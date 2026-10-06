@@ -9412,6 +9412,16 @@
     "theme": {
       "high_contrast": "🔆 উচ্চ কনট্রাস্ট"
     },
+    "useCloseSessionTree": {
+      "body": "এই সেশনের নিচে এখনও চলছে: {{descendants}}-এর মধ্যে {{running}}টি। বন্ধ করলে তাদের চলমান কাজ বাতিল হবে, এবং তা আর ফেরানো যাবে না।",
+      "body_idle": "এই সেশন বন্ধ করলে এর নিচে নেস্ট করা সবকিছুও বন্ধ হবে: আরও {{descendants}}টি।",
+      "confirm": "সব {{number}}টি বন্ধ করুন",
+      "finished": "সম্পন্ন",
+      "level": "স্তর {{depth}}",
+      "level_self": "এই সেশন",
+      "running": "চলছে",
+      "title": "এই সেশন ও এর নিচের সবকিছু বন্ধ করবেন?"
+    },
     "useCronActions": {
       "failed_to_cancel_job": "জব বাতিল করা যায়নি",
       "failed_to_pause_job": "কাজটি বিরতি দেওয়া যায়নি",

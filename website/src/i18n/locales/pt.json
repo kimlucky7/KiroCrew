@@ -9538,6 +9538,16 @@
     "theme": {
       "high_contrast": "🔆 Alto contraste"
     },
+    "useCloseSessionTree": {
+      "body": "Ainda em execução abaixo desta sessão: {{running}} de {{descendants}}. Fechar cancela o trabalho em andamento, e isso não pode ser desfeito.",
+      "body_idle": "Fechar esta sessão também fecha tudo que está aninhado abaixo: {{descendants}} a mais.",
+      "confirm": "Fechar todas ({{number}})",
+      "finished": "Concluída",
+      "level": "Nível {{depth}}",
+      "level_self": "Esta sessão",
+      "running": "Em execução",
+      "title": "Fechar esta sessão e tudo abaixo dela?"
+    },
     "useCronActions": {
       "failed_to_cancel_job": "Falha ao cancelar o job",
       "failed_to_pause_job": "Falha ao pausar o trabalho",

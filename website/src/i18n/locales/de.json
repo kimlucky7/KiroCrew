@@ -9412,6 +9412,16 @@
     "theme": {
       "high_contrast": "🔆 Hoher Kontrast"
     },
+    "useCloseSessionTree": {
+      "body": "Unter dieser Sitzung laufen noch: {{running}} von {{descendants}}. Das Schließen bricht ihre laufende Arbeit ab, und das lässt sich nicht rückgängig machen.",
+      "body_idle": "Das Schließen dieser Sitzung schließt auch alles darunter Verschachtelte: {{descendants}} weitere.",
+      "confirm": "Alle {{number}} schließen",
+      "finished": "Abgeschlossen",
+      "level": "Ebene {{depth}}",
+      "level_self": "Diese Sitzung",
+      "running": "Läuft",
+      "title": "Diese Sitzung und alles darunter schließen?"
+    },
     "useCronActions": {
       "failed_to_cancel_job": "Job konnte nicht abgebrochen werden",
       "failed_to_pause_job": "Job konnte nicht pausiert werden",

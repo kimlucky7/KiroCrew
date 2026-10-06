@@ -9538,6 +9538,16 @@
     "theme": {
       "high_contrast": "🔆 Contraste élevé"
     },
+    "useCloseSessionTree": {
+      "body": "Toujours en cours sous cette session : {{running}} sur {{descendants}}. La fermeture annule le travail en cours, et c'est irréversible.",
+      "body_idle": "Fermer cette session ferme aussi tout ce qui est imbriqué en dessous : {{descendants}} de plus.",
+      "confirm": "Tout fermer ({{number}})",
+      "finished": "Terminée",
+      "level": "Niveau {{depth}}",
+      "level_self": "Cette session",
+      "running": "En cours",
+      "title": "Fermer cette session et tout ce qu'elle contient ?"
+    },
     "useCronActions": {
       "failed_to_cancel_job": "Échec de l’annulation de la tâche",
       "failed_to_pause_job": "Échec de la mise en pause de la tâche",

@@ -9412,6 +9412,16 @@
     "theme": {
       "high_contrast": "🔆 हाई कॉन्ट्रास्ट"
     },
+    "useCloseSessionTree": {
+      "body": "इस सत्र के नीचे अभी भी चल रहे हैं: {{descendants}} में से {{running}}. बंद करने पर उनका चालू काम रद्द हो जाएगा, और उसे पहले जैसा नहीं किया जा सकता.",
+      "body_idle": "इस सत्र को बंद करने पर इसके नीचे नेस्ट किया गया सब कुछ भी बंद हो जाएगा: {{descendants}} और.",
+      "confirm": "सभी {{number}} बंद करें",
+      "finished": "पूरा हुआ",
+      "level": "स्तर {{depth}}",
+      "level_self": "यह सत्र",
+      "running": "चल रहा है",
+      "title": "इस सत्र और इसके नीचे की हर चीज़ को बंद करें?"
+    },
     "useCronActions": {
       "failed_to_cancel_job": "जॉब रद्द करने में विफल",
       "failed_to_pause_job": "जॉब रोकने में विफल",

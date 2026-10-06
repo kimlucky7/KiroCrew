@@ -9286,6 +9286,16 @@
     "theme": {
       "high_contrast": "🔆 고대비"
     },
+    "useCloseSessionTree": {
+      "body": "이 세션 아래에서 아직 실행 중: {{descendants}}개 중 {{running}}개. 닫으면 진행 중인 작업이 취소되며 되돌릴 수 없습니다.",
+      "body_idle": "이 세션을 닫으면 그 아래 중첩된 항목도 모두 닫힙니다: {{descendants}}개 더.",
+      "confirm": "모두 닫기({{number}})",
+      "finished": "완료",
+      "level": "{{depth}}단계",
+      "level_self": "이 세션",
+      "running": "실행 중",
+      "title": "이 세션과 그 아래 모든 항목을 닫을까요?"
+    },
     "useCronActions": {
       "failed_to_cancel_job": "작업을 취소하지 못했습니다",
       "failed_to_pause_job": "작업을 일시중지할 수 없습니다",

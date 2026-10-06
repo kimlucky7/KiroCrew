@@ -9286,6 +9286,16 @@
     "theme": {
       "high_contrast": "🔆 高对比度"
     },
+    "useCloseSessionTree": {
+      "body": "此会话下仍在运行：{{descendants}} 个中的 {{running}} 个。关闭会取消它们正在进行的工作，且无法撤销。",
+      "body_idle": "关闭此会话也会关闭其下嵌套的会话：另外 {{descendants}} 个。",
+      "confirm": "全部关闭（{{number}}）",
+      "finished": "已完成",
+      "level": "第 {{depth}} 层",
+      "level_self": "此会话",
+      "running": "运行中",
+      "title": "关闭此会话及其下所有会话？"
+    },
     "useCronActions": {
       "failed_to_cancel_job": "取消任务失败",
       "failed_to_pause_job": "暂停任务失败",
