@@ -893,4 +893,6 @@ the contracts CHANGE on both sides. Template: `src/kiro_crew/apps/builtins/issue
   The rootdir `conftest.py` floor applies there (plus the app's own `tests/conftest.py`
   where one exists), not `test/conftest.py`, and the helpers under `test/` are not on
   your import path: take shared test support from
-  `kiro_crew.testing`, which ships in the package (`kiro_crew.testing.links`).
+  `kiro_crew.testing`, which ships in the package (`kiro_crew.testing.clock`, `.wait`,
+  `.ids` and `.links`), and the rootdir's `manual_clock`, `seeded_rng` and `local_tz`
+  fixtures.

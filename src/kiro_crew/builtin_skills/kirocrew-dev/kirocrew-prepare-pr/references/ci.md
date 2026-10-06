@@ -25,8 +25,8 @@ run in the Stage-2 `fork-*-review.yml` lanes under the same check names.
 
 **Merge queue:** the workflows are ready, the ruleset has not switched it on yet.
 Once it is on, auto-merge enqueues the PR; the queue re-runs the tests (not the AI
-reviews) on the tree that lands, and a failing group ejects the PR — fix or rerun,
-then re-arm.
+reviews) on the tree that lands, and a failing group ejects the PR — fix it, or rerun
+it once after the skill's *Before you rerun a red test*, then re-arm.
 
 ## Updating a PR body when `gh` fails
 

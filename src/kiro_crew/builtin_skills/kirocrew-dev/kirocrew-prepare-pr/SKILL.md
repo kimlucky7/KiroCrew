@@ -87,6 +87,12 @@ All five, together:
 4. One clean commit on a feature branch (when the profile sets `single_commit`).
 5. **Every raised concern answered on the PR** — see "Dispositions" below.
 
+When the diff adds or changes a test, review-ready also means the body carries that
+test's determinism proof: the repeats and a shuffled order, and for a fix to a flaky
+test the forced condition red on the parent and green on the fix (testing-conventions
+§ Proving a determinism fix). `AUTOSDE.yaml`'s `tests-are-deterministic` rule is what
+review holds the test itself to.
+
 Advisory findings may remain *unfixed*. They may not remain *unanswered*.
 A green rollup with an unanswered `CONCERNS` verdict is **not** converged.
 
@@ -412,6 +418,7 @@ full suites are CI's job and the Phase 3 poll is the authority on them.
    - **Check exit codes, never piped output.** `cmd | tail` makes `$?` tail's status. Redirect to a file and test `$?`.
    - **Run the Playwright E2E suite when the diff adds a dashboard heading or tab label** — a new heading breaks existing `getByRole` locators with `strict mode violation`.
    - **Every new guard or validator helper must have a non-test caller.** `grep` outside `test/`. A change under `src/kiro_crew/deploy/` must be diffed against its `scripts/*.sh` counterpart, and vice versa.
+   - **Run the repository's semgrep rules on the diff** when it adds or changes code or tests: `semgrep scan --config semgrep/ --baseline-commit "$(git merge-base origin/<base> HEAD)" --error`. CI's SAST job runs the same rules diff-scoped and blocking (alongside the registry packs), and none of them is in `gates[]`.
 
 2. **Local review — one subagent per profile reviewer**, briefed from CI's own workflows. Run `python3 $SKILL_DIR/scripts/local_review.py --base origin/<base>` from the worktree: it resolves both SHAs itself and writes one task file per reviewer (`local-review-<name>.md`) with that reviewer's prompt **extracted literally from its `contract` workflow**, plus the base-ref `AUTOSDE.yaml` snapshots, the `BASE...HEAD` diff and the PR intent inside the workflow's own UNTRUSTED framing. It never calls a model.
 
@@ -457,7 +464,24 @@ gh api "repos/<owner>/<repo>/actions/runs?head_sha=$OLD_SHA&per_page=100" \
 ```
 
 Leave a reviewer lane running while its verdict still decides *whether* to fix; a
-flake gets `gh run rerun <run-id> --failed`, not a cancel.
+flake gets a rerun after *Before you rerun a red test* below, not a cancel.
+
+**Before you rerun a red test.** A flaky test is a defect someone owns, so a rerun
+comes after a record, never instead of one:
+
+- **Prove the red is not yours.** Reproduce the exact node id on a clean
+  `origin/<base>` worktree (`kirocrew-worktree-dev`), or show the same node id red on
+  `main` or on another head in CI history (a Windows- or macOS-only red cannot be
+  reproduced from Linux). A red only your branch shows is yours to fix.
+- **Record it in the flake ledger**: the open issues titled `Flaky: <test name> ...`,
+  labelled `area: tests`. Search for the test's function name
+  (`gh issue list --state open --search "<test name> in:title"`). Comment on the match
+  with the run URL, the OS and the failing line, or open one in that form with the same
+  three facts.
+- **Rerun at most once**, only what failed (`gh run rerun <run-id> --failed`, or
+  `--job <job-id>`).
+- **A test with two or more ledger reports in 14 days is fixed before more feature work
+  lands on top of it**, not rerun again.
 
 1. **Push only the reviewed commit.** Require a clean index/worktree and fail closed unless `[ "$(git rev-parse HEAD)" = "$REVIEWED_SHA" ]`; any intervening mutation returns to Phase 2. Run the post-squash guard (`single_commit` only): `python3 $SKILL_DIR/scripts/push_guard.py --base <base> --require-single-on-base` — **0** safe, **40** do NOT push (read each diff; name yours after `--`), **41** follow the remedy, **2** env.
 
@@ -509,7 +533,7 @@ flake gets `gh run rerun <run-id> --failed`, not a cancel.
    runs discovery mode, where a lane that never posted passes silently.
 
    - **0** → Phase 4.
-   - **20** → run `pr_findings.py` and **TRIAGE before re-pushing**. An `unanswered CONCERNS from <LANE>` reason is cleared by POSTING dispositions, not by pushing. Before reading a red as live, dedupe the check runs to the newest per name: a force-push leaves cancelled twins on old heads. **(a) CI/build/test failure** → read `gh run view <run-id> --log-failed`. If the same check also fails on main, follow *When main is red*. Otherwise, once you decide to fix, cancel the head's in-flight runs, reproduce the **exact failing node ids** locally, and fix the **root cause**; a confirmed flake gets `gh run rerun <run-id> --failed` (or `--job <job-id>`), never a whole-run replay. **(b) Review finding** → whole-design verdicts first, then the three questions. For Kiro Crew Opus-family or GPT 6.1 findings that need code changes, MUST execute [Review repair routing](#review-repair-routing): delegate the minimal fix and self-review to the model-pinned subagent, then verify in the parent. Otherwise rebut with evidence (never dismiss a CodeQL alert merely to pass), override it per *Overriding a false positive*, or ask a maintainer. **(c) Conflict / behind base** → Phase 1 handles it. Then **loop back to Phase 1** → 2 → 3 carrying those fixes.
+   - **20** → run `pr_findings.py` and **TRIAGE before re-pushing**. An `unanswered CONCERNS from <LANE>` reason is cleared by POSTING dispositions, not by pushing. Before reading a red as live, dedupe the check runs to the newest per name: a force-push leaves cancelled twins on old heads. **(a) CI/build/test failure** → read `gh run view <run-id> --log-failed`. If the same check also fails on main, follow *When main is red*. Otherwise, once you decide to fix, cancel the head's in-flight runs, reproduce the **exact failing node ids** locally, and fix the **root cause**; a flake confirmed and recorded per *Before you rerun a red test* gets `gh run rerun <run-id> --failed` (or `--job <job-id>`) once, never a whole-run replay. **(b) Review finding** → whole-design verdicts first, then the three questions. For Kiro Crew Opus-family or GPT 6.1 findings that need code changes, MUST execute [Review repair routing](#review-repair-routing): delegate the minimal fix and self-review to the model-pinned subagent, then verify in the parent. Otherwise rebut with evidence (never dismiss a CodeQL alert merely to pass), override it per *Overriding a false positive*, or ask a maintainer. **(c) Conflict / behind base** → Phase 1 handles it. Then **loop back to Phase 1** → 2 → 3 carrying those fixes.
    - **10** → still running. In a chat slot, load `kirocrew-core::monitor_start`
      through `tool_search`, request a finite same-session loop, then END THE TURN.
      Slot-less subagent, cron, webhook and task-runner turns cannot arm one: use
@@ -565,7 +589,7 @@ outside author asks a maintainer to merge.
   check the approval names the new head and say so when it does not.
 - **A new red** after the base moved → triage it as Phase 3 exit 20.
 - **Merge queue ejection** (once the queue is on) → read the group's failing run,
-  fix or rerun, re-arm.
+  fix it, or rerun it once after *Before you rerun a red test*, then re-arm.
 - **Merged** → report and call `autonudge_stop`.
 
 **Report:** the full PR URL, one-line status, commit SHA, whether auto-merge armed

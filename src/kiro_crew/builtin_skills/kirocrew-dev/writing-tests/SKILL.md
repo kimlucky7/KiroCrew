@@ -466,48 +466,36 @@ The consequence for how you write a test:
 
 ### Determinism top 12
 
-The [contract](../../../../../docs/system-specs/common/testing-conventions.md#determinism-contract-read-this-first),
-one box each. Every other item below is a specialised trap.
+One box per rule of the [Determinism contract](../../../../../docs/system-specs/common/testing-conventions.md#determinism-contract-read-this-first),
+naming the shape; the contract line holds the detail and its numbers. The helpers are in
+`kiro_crew.testing` (`clock`, `wait`, `ids`). Every other item below is a specialised trap.
 
-- [ ] D1: every wait polls the state it is about to assert under a bounded deadline that
-      RAISES quoting what it last read (`_await_parked` in `test_runloop_integration.py`);
-      no `sleep` stands in as a barrier, and an absence assertion follows a positive signal
-- [ ] D2: one clock, replaced on the module-under-test's own `time` / `datetime` binding
-      (`_PointClock` in `test_decisions_memory_recall_reachable.py`), never a `setattr`
-      that rebinds a stdlib clock or `time.sleep` for the whole worker
-- [ ] D3: no sleep to make two timestamps differ: the test sets them (`os.utime(ns=...)`,
-      a stepped clock, an explicit `created_at`), asserts strictly, and pins a time-sorted
-      output's tie-break with an equal-stamp pair
-- [ ] D4: no order asserted that the code does not define (`set`, `listdir`/`iterdir`/
-      `glob`, `as_completed` iteration, side effects appended in completion order): compare
-      as `set`/`Counter` or sort by a total key (`gather`'s return list is in argument
-      order and is fine)
-- [ ] D5: an expectation reads the zone the product stamps, with the instant frozen; a
-      local-time test pins its zone and runs under `UTC`, `Pacific/Kiritimati` and
-      `America/St_Johns` — injecting the zone where the product allows it, otherwise
-      `TZ` + `time.tzset()` in a fixture under a POSIX-only skip, re-`tzset()` after the
-      fixture's `monkeypatch.context()` restores it (never a bare `monkeypatch.undo()`)
-- [ ] D6: every RNG that feeds an assertion is `random.Random(SEED)`; every fake PID is
-      unallocatable (`_UNALLOCATABLE_PID`)
-- [ ] D7: no upper bound on a measured duration, rate or sample count, except a wait's
-      lost-run bound or a bound relative to a span the test measured itself; a lower
-      bound proving a deadline was honoured (one-tick margin) is fine, and an existing
-      complexity guard keeps its thread-CPU budget at the original constant
-- [ ] D8: every await, `join` or `communicate` the test itself must unblock is bounded and
-      fails by name (`asyncio.wait_for`, `join(timeout)` + `is_alive()`,
-      `communicate(timeout=)`)
-- [ ] D9: every listener binds port 0 and reports the port it got
-- [ ] D10: loopback only; the network is stubbed at the seam the product calls
-- [ ] D11: globals only through `monkeypatch` (an autouse fixture through
-      `_floor_monkeypatch`); no in-process `importlib.reload` of a shared module (a private
-      copy via `spec_from_file_location`, registered under its unique name in
-      `sys.modules` with `monkeypatch.setitem` before `exec_module`, never under the real
-      name); a `sys.modules` eviction restores the entry AND the parent package attribute
-      in the same scope
-- [ ] D12: proven: 20 repeats at `-n0`, 10 at `-n 4` with neighbours and a shuffled
-      order; a FIX to a flaky test also shows the forced condition red on the parent
-      commit and green on the fix; every timing number comes from CI-equivalent load,
-      never from an overloaded host
+- [ ] D1: wait on the asserted state with a raising, bounded poll (`wait_until`,
+      `async_wait_until`, `until_parked`), never a sleep
+      ([class 2](../../../../../docs/system-specs/common/testing-conventions.md#2-wall-clock-races))
+- [ ] D2: one clock, installed on the module-under-test's own binding
+      (`ManualClock.install`, the `manual_clock` fixture)
+      ([class 2](../../../../../docs/system-specs/common/testing-conventions.md#2-wall-clock-races))
+- [ ] D3: set the timestamps (`ManualClock(tick=...)`, `os.utime(ns=...)`, `seq_ids`),
+      assert order strictly, pin the tie-break
+      ([class 7](../../../../../docs/system-specs/common/testing-conventions.md#7-data-order-and-timestamp-ties))
+- [ ] D4: no asserted order the code does not define
+      ([class 7](../../../../../docs/system-specs/common/testing-conventions.md#7-data-order-and-timestamp-ties))
+- [ ] D5: the product's zone and a frozen instant, never the host's (`local_tz`)
+      ([class 1](../../../../../docs/system-specs/common/testing-conventions.md#1-nondeterministic-input))
+- [ ] D6: seeded RNGs and unallocatable fake PIDs (`seeded_rng`, `unallocatable_pids`)
+      ([class 1](../../../../../docs/system-specs/common/testing-conventions.md#1-nondeterministic-input))
+- [ ] D7: no upper bound on a measured duration beyond what the contract allows
+      ([class 5](../../../../../docs/system-specs/common/testing-conventions.md#5-absolute-time-budgets-on-instrumented-runs))
+- [ ] D8: every self-unblocked await, join or communicate bounded, failing by name
+      ([class 6](../../../../../docs/system-specs/common/testing-conventions.md#6-a-hang-is-a-lost-run-not-a-failed-test))
+- [ ] D9: listeners bind port 0 and report the port ([Rules](../../../../../docs/system-specs/common/testing-conventions.md#rules))
+- [ ] D10: loopback only, the network stubbed at the product's seam
+      ([side effects](../../../../../docs/system-specs/common/testing-conventions.md#side-effects-what-a-full-run-does-to-the-host-and-how-to-see-it))
+- [ ] D11: globals through `monkeypatch`, no in-process reload, evictions restored
+      ([class 4](../../../../../docs/system-specs/common/testing-conventions.md#4-order-dependence-and-shared-state))
+- [ ] D12: proven by repeats, a shuffled order and, for a fix, the forced condition
+      ([proving a fix](../../../../../docs/system-specs/common/testing-conventions.md#proving-a-determinism-fix))
 
 ### Specialised traps (search when your test touches X)
 

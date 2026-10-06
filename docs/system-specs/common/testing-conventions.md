@@ -25,27 +25,32 @@ outside those roots is never collected, so it stays green by omission.
 
 Every backend test MUST keep these twelve rules. Each line names the shape to use and
 links the class that explains it; the rest of this document is the evidence behind
-them. `AUTOSDE.yaml`'s `tests-are-deterministic` rule holds review to them. The
+them. The shared shapes live in `kiro_crew.testing` (`clock`, `wait`, `ids`), which
+ships in the wheel, so the in-package app suites use them too; the rootdir
+`conftest.py` adds the `manual_clock`, `seeded_rng` and `local_tz` fixtures.
+`AUTOSDE.yaml`'s `tests-are-deterministic` rule holds review to them. The
 frontend's rules are in
 [website/docs/testing.md](../../../website/docs/testing.md#determinism-establish-the-state-you-assert-on).
 
 - **D1. Wait on a signal, never a duration.** Poll the state you are about to assert
-  under a bounded deadline that RAISES quoting the last state it read
-  (`_await_parked` in `test/test_runloop_integration.py`); that deadline is a lost-run
-  bound (D7). An absence assertion waits on a positive signal first (the waiter
-  registered, the product's own tick counter reached N), or it passes for the trivial
-  reason.
+  under a bounded deadline that RAISES quoting the last state it read: `wait_until` /
+  `async_wait_until` in `kiro_crew.testing.wait`, `until_parked` for a task parked on a
+  lock, `drained_progress` for a batch whose speed the host owns; import it at module
+  level. That deadline is a lost-run bound (D7), half the test's timeout by default. An
+  absence assertion waits on a positive signal first (the waiter registered, the
+  product's own tick counter reached N), or it passes for the trivial reason.
   [Class 2](#2-wall-clock-races).
 - **D2. One clock, injected or frozen at the seam the code reads.** Replace the module's
-  own `time` / `datetime` name (`_PointClock` in
-  `test/test_decisions_memory_recall_reachable.py`); never rebind a stdlib clock or
-  `time.sleep` for the whole worker. [Class 2](#2-wall-clock-races),
+  own `time` / `datetime` name with a `ManualClock` (`kiro_crew.testing.clock`, or the
+  `manual_clock` fixture): `clock.install(monkeypatch, module)`. Never rebind a stdlib
+  clock or `time.sleep` for the whole worker. [Class 2](#2-wall-clock-races),
   [class 4](#4-order-dependence-and-shared-state).
 - **D3. Never sleep to make two timestamps differ: set them** (`os.utime(path, ns=...)`
   as `write_config` in `test/_hot_reload_helpers.py` does, a stepped clock such as
-  `increasing_clock` in `test/windows_sim.py`, an explicit `created_at`). Assert order
-  strictly, and pin a time-sorted output's tie-break with an equal-stamp pair
-  (`colliding_clock`, same file).
+  `ManualClock(tick=...)`, an explicit `created_at`, ids from `seq_ids` whose string
+  order is their creation order). Assert order strictly, and pin a time-sorted output's
+  tie-break with an equal-stamp pair (a frozen `ManualClock`, or `colliding_clock` in
+  `test/windows_sim.py`).
   [Class 7](#7-data-order-and-timestamp-ties).
 - **D4. Never assert an order you did not define.** A `set`, a dict built from one,
   `listdir` / `iterdir` / `glob`, `as_completed` iteration and side effects appended in
@@ -55,12 +60,14 @@ frontend's rules are in
 - **D5. No dependence on the host's zone or locale.** Read the zone the product stamps,
   with the instant frozen; a test about local time pins its zone and runs under `UTC`,
   `Pacific/Kiritimati` (+14:00) and `America/St_Johns` (-03:30). Inject the zone where
-  the product allows it; otherwise set `TZ` and call `time.tzset()` under a POSIX-only
-  skip, restored by the fixture's scope (class 1 has the shape), never by a bare
-  `monkeypatch.undo()`. [Class 1](#1-nondeterministic-input).
-- **D6. Seed every RNG that feeds an assertion** (`random.Random(SEED)`), and give a
-  fake PID a number no OS can allocate (`_UNALLOCATABLE_PID` in
-  `test/test_update_provider.py`). [Class 1](#1-nondeterministic-input).
+  the product allows it; otherwise use the `local_tz` fixture, which sets `TZ` and calls
+  `time.tzset()` under a POSIX-only skip and restores both at teardown (class 1 has the
+  shape), never a bare `monkeypatch.undo()`. [Class 1](#1-nondeterministic-input).
+- **D6. Seed every RNG that feeds an assertion** (`random.Random(SEED)`, or the
+  `seeded_rng` fixture, seeded from the node id and printing the seed when the test
+  fails), and give a fake PID a number no OS can allocate (`UNALLOCATABLE_PID` /
+  `unallocatable_pids()` in `kiro_crew.testing.ids`).
+  [Class 1](#1-nondeterministic-input).
 - **D7. No upper bound on a measured duration, rate or sample count, except a lost-run
   bound or a lower bound.** Assert the work, the schedule or the order. A wait's
   [lost-run bound](#6-a-hang-is-a-lost-run-not-a-failed-test) may stay, and so may a
@@ -78,7 +85,8 @@ frontend's rules are in
   subject needs a number before it can listen, and then handle `EADDRINUSE`.
   [Rules](#rules).
 - **D10. Loopback only.** Stub the network at the seam the product calls; no test
-  depends on a host other than `127.0.0.1` / `::1`.
+  depends on a host other than `127.0.0.1` / `::1`. The rootdir network floor reports a
+  test that reaches past loopback; one that must is marked `@pytest.mark.real_network`.
   [Side effects](#side-effects-what-a-full-run-does-to-the-host-and-how-to-see-it).
 - **D11. Process globals change only through `monkeypatch`**, and an autouse fixture's
   only through `_floor_monkeypatch`. Never `importlib.reload` a shared module in-process:
@@ -86,7 +94,8 @@ frontend's rules are in
   registered under that name with `monkeypatch.setitem(sys.modules, name, mod)` before
   `exec_module` (a `@dataclass` module needs it), never under the real name.
   A `sys.modules` eviction restores the entry AND its parent package's attribute in the
-  same scope, and a new process-global ships its floor entry.
+  same scope (the rootdir package-attribute floor puts back a `kiro_crew` one a test
+  left changed, and names the test), and a new process-global ships its floor entry.
   [Class 4](#4-order-dependence-and-shared-state).
 - **D12. Prove it.** Each new or changed test passes 20 times at `-n0`, 10 times at
   `-n 4` beside its neighbours, and in a shuffled order. A FIX to a flaky test also
@@ -269,9 +278,9 @@ multi-phase uninstall's phase 1, a dependency coordinator's park, a policy-file 
 anything spanning them is a thin wrapper over `threading.Event` / `asyncio.Event` plus
 `try`/`finally` behind an indirection every reader must learn, and the seam form holds
 nothing at all, so a hold helper would not even cover it. A condition POLL is a different
-thing: wait on the state through a raising, bounded poll in the shape of `_await_parked`
-in `test/test_runloop_integration.py` ([D1](#determinism-contract-read-this-first)),
-never another silent one.
+thing: wait on the state through `kiro_crew.testing.wait` (`wait_until`,
+`async_wait_until`, `until_parked`), which raises with the state it last read
+([D1](#determinism-contract-read-this-first)), never another silent poll.
 
 A mock subprocess handed to a real kill path must not carry a pid a live process
 can own. The kill helpers' only handle on their target is the integer `pid`:
@@ -291,7 +300,9 @@ path, so the crash needs the full shard. The surface is every kill helper on
 one of the two spellings
 already in the tree rather than inventing a third: give the mock a pid above
 every supported platform's `pid_max`
-(`test/test_update_provider.py::_UNALLOCATABLE_PID`), or neutralise the killer
+(`src/kiro_crew/testing/ids.py::UNALLOCATABLE_PID`, or `unallocatable_pids(n)` for
+several; `test/test_update_provider.py::_UNALLOCATABLE_PID` is the same value), or
+neutralise the killer
 and assert the ordering instead
 (`test/test_platform_compat.py::TestKillAndReap`). The first spelling IS gated:
 `semgrep/mock-pid-allocatable.yaml` (`kirocrew.mock-pid-allocatable`), which
@@ -658,6 +669,26 @@ checkout.
 It also pins the other real host paths a test must not reach: the subagent registry (a
 running gateway sweeps stray entries there as orphans), the 610MB embedding-model
 download, and the agent-state sidecar.
+
+It also carries the [Determinism contract](#determinism-contract-read-this-first)'s
+floors. Two of them act: `_kiro_crew_package_attr_floor` puts back every `kiro_crew.*`
+module, parent-package attribute and root-package global a test replaced, evicted or
+rebound (and reports the test; `KIROCREW_PKG_ATTR_STRICT=1` fails it instead; a module the
+test imported meanwhile stays, bound to what it saw), and
+`_reset_member_eventlog_singleton` drains the member event-log queue (class 4). The rest
+only REPORT, in one `[determinism floors]` warning per worker at session end: a test that
+changed the process time zone, left work running or queued on a shared
+`kiro_crew.executors` pool, reached a host other than loopback (a test marked
+`@pytest.mark.real_network` is exempt; `KIROCREW_NET_STRICT=1` refuses the call and fails
+the test, except a datagram route probe, which sends nothing), or signalled the worker
+itself, its xdist controller, a process group, or, on Linux, a sibling xdist worker or
+another account's process. A network or kill finding is charged to the test running when
+it happens, so a background thread an earlier test left behind is reported against
+whichever test it outlives into. They report before they may fail anyone, so their counts
+are read from a full CI run before a strict switch (set to `1`) is turned on. The
+worker's last test is checked after that warning is written, so its findings are not in
+it. The package-attribute floor also undoes a replacement made by a wider-scoped fixture
+that a test created lazily (`request.getfixturevalue`) at that test's teardown.
 
 Five members are there for a different reason — a **process-global** that any testpath
 can poison for every test after it, which is the same failure shape as host mutation
@@ -4158,19 +4189,21 @@ the instant frozen: a mirror of a product defined in local time (a ZIP entry's
 `date_time`) reads `time.localtime(<fixed instant>)`, never the live clock. A test about
 local time sets its zone itself and runs under `UTC`, `Pacific/Kiritimati` (+14:00, a
 calendar day ahead of UTC for 14 hours of every day) and `America/St_Johns` (-03:30, a
-half-hour offset). Inject the zone where the product takes one. Otherwise a fixture sets
-`TZ` inside `monkeypatch.context()`, calls `time.tzset()`, yields, and calls
-`time.tzset()` again after the context has put the variable back; `time.tzset` exists
-only on POSIX, so the test skips elsewhere. Never restore it with a bare
-`monkeypatch.undo()` in the test body. The per-interpreter `str` hash seed decides set
-iteration order, which is [class 7](#7-data-order-and-timestamp-ties).
+half-hour offset). Inject the zone where the product takes one. Otherwise request the
+rootdir `local_tz` fixture and call `local_tz("Pacific/Kiritimati")`: it sets `TZ`,
+calls `time.tzset()`, and at teardown puts the variable back and calls `time.tzset()`
+again; `time.tzset` exists only on POSIX, so the test skips elsewhere. Never restore it
+with a bare `monkeypatch.undo()` in the test body. The per-interpreter `str` hash seed
+decides set iteration order, which is [class 7](#7-data-order-and-timestamp-ties).
 
-**A property test is random input by design.** Hypothesis's `default` profile
-(`test/conftest.py`: `max_examples=20`, not derandomized) draws new examples on every run,
-so a `@given` test can red a run whose diff never touched it. Reproduce it from the
-falsifying example the report prints (under `CI` it also prints a `@reproduce_failure`
-blob), pin that counterexample with `@example`, and fix the property; never answer it
-with a skip.
+**A property test is random input by design.** Locally, Hypothesis's `default` profile
+(`test/conftest.py`: `max_examples=20`) draws new examples on every run. Under `CI` the
+suite loads the `ci` profile instead: the same settings derandomized, so each test
+replays one fixed example sequence and a `@given` test cannot red a run whose diff never
+touched it, with no example database and the `@reproduce_failure` blob printed.
+Exploration happens locally (or under `HYPOTHESIS_PROFILE=thorough`). Reproduce a red
+from the falsifying example or the blob, pin that counterexample with `@example`, and fix
+the property; never answer it with a skip.
 
 **The kernel's name for a hardlinked inode is an input too.** An inode with
 `st_nlink > 1` has several names, and macOS `F_GETPATH` returns whichever one the name
@@ -4266,9 +4299,9 @@ deadline with a 1 s `time.sleep` "burn" left the judge's wait at the mercy of ev
 cold step before it (store, pool, embedding): on loaded Windows runners the remaining
 wait came out negative or the route answered `504 memory_recall_timeout`. Replace the
 module's own `time` name with a frozen clock the test advances, assert the computed
-wait exactly, and give the real deadline a generous backstop
-(`_PointClock` in `test_decisions_memory_recall_reachable.py`). To make a deadline
-pass, move it to the real present rather than sleeping past it.
+wait exactly, and give the real deadline a generous backstop (`ManualClock.install`;
+`_PointClock` in `test_decisions_memory_recall_reachable.py` is the hand-rolled form). To
+make a deadline pass, move it to the real present rather than sleeping past it.
 
 Where a test wants a timeout to expire at a particular AWAIT -- the cancellation must
 land inside the steer RPC, after authorization, not in the gate work in front of it --
@@ -4651,10 +4684,11 @@ test fails. Raw assignment does not.
 `monkeypatch`.** pytest hands a test and every fixture it requests ONE `monkeypatch`
 instance, so a bare `monkeypatch.undo()` in a test body also reverts every autouse
 fixture that patched through it, and the rest of that test runs on the host's real value.
-The rootdir conftest's `_floor_monkeypatch` is undone independently, so a new autouse
-fixture requests it instead. Most older ones still take the shared instance, including
-three in `test/conftest.py` (`_approve_every_mcp_launch`, `_reset_session_switch_locks`,
-`_no_boot_sandbox_sweep`).
+The rootdir conftest's `_floor_monkeypatch` is undone independently, so an autouse
+fixture requests it instead; no autouse fixture in either conftest patches through the
+shared instance. `test/conftest.py`'s `_a_shared_monkeypatch_first` requests it only so
+that it is created before the others there and undone after their teardowns, which read
+the test's patches while they unwind.
 
 **Never rebind a stdlib clock or `time.sleep`.**
 `monkeypatch.setattr(time, "time", ...)` or a string target such as
@@ -4662,9 +4696,10 @@ three in `test/conftest.py` (`_approve_every_mcp_launch`, `_reset_session_switch
 for the whole worker: every thread and library that looks the name up at call time
 reads the fake while the patch holds, and asyncio's `loop.time()` is one of them, so a
 frozen `time.monotonic` freezes every event loop's timers. Replace the
-module-under-test's own `time` binding with a namespace that delegates every other name
-to the real module
-(`monkeypatch.setattr(mod, "time", SimpleNamespace(**{**vars(time), "monotonic": fake}))`).
+module-under-test's own `time` binding with a stand-in that delegates every other name
+to the real module: `ManualClock().install(monkeypatch, mod)` does that, and refuses a
+stdlib or test-runner module. By hand,
+`monkeypatch.setattr(mod, "time", SimpleNamespace(**{**vars(time), "monotonic": fake}))`.
 (`_PointClock` can use a bare namespace because the point reads only `time.monotonic`.)
 The same reach applies, more mildly, to a patch of `asyncio.create_subprocess_exec` or
 `os.getpid` on the stdlib module: every caller in the worker sees it. Prefer an injected
@@ -4763,16 +4798,16 @@ the boundary does not help: the closure resolves the service and the path as it 
 Linux the overlap is usually too narrow to see, so the leak shows only where fsync is
 slow.
 
-`test/conftest.py`'s `_reset_member_eventlog_singleton` drains that queue at teardown,
-before the home pin is undone, and FAILS the test that filled a queue which will not
-drain — so the cost lands on the test that queued the work rather than on whichever test
-would have inherited it. It binds `drain_for_shutdown` at SETUP, because the tests of the
-shutdown path replace that function with a wedged or recording stand-in and the patch is
-still in force at teardown.
+The rootdir `conftest.py`'s `_reset_member_eventlog_singleton` (rootdir, so the
+in-package app suites get it too) drains that queue at teardown, before the home pin is
+undone (it depends on `_isolate_kirocrew_home`), and FAILS the test that filled a queue
+which will not drain — so the cost lands on the test that queued the work rather than on
+whichever test would have inherited it. It binds `drain_for_shutdown` at SETUP when the
+module is already loaded, so a test of the shutdown path that replaces that function
+with a wedged or recording stand-in cannot wedge the floor.
 
-Two things that floor does not reach, both residual rather than fixed: it is in
-`test/conftest.py`, so the in-package app suites under `src/kiro_crew/apps/builtins/*/tests`
-pay nothing for it, and it covers `eventlog-io` only — the dashboard's `notif-io` pool
+One thing that floor does not reach, residual rather than fixed: it covers `eventlog-io`
+only — the dashboard's `notif-io` pool
 (`_notification_io_executor`) resolves the notifications file the same way when its job
 runs. The fix that removes the race rather than draining it is the one in
 [the classes it found](#the-classes-it-found-and-the-one-correct-fix-for-each): resolve
@@ -5025,9 +5060,14 @@ that passed vacuously also the negative control:
   ```bash
   python -m pytest --collect-only -qq -n0 <files> | grep '::' > ids.txt
   SEED=$RANDOM; echo "seed=$SEED"
-  python -c "import random,sys; i=open('ids.txt').read().splitlines(); random.Random(int(sys.argv[1])).shuffle(i); open('shuffled.txt','w').write('\n'.join(i)+'\n')" "$SEED"
+  python -c "import random,sys; i=open('ids.txt').read().splitlines(); random.Random(int(sys.argv[1])).shuffle(i); open('shuffled.txt','w').write(''.join(x+'\n' for x in i))" "$SEED"
+  [ -s shuffled.txt ] || { echo "no ids collected"; exit 1; }
   python -m pytest -n0 -p no:cacheprovider -q @shuffled.txt
   ```
+
+  The guard matters: an empty `@file` is an empty argument list, and pytest then runs
+  the whole default `testpaths` suite. Any loop that builds node ids aborts on an empty
+  list the same way; the full suite never runs locally.
 - **The forced condition.** A throwaway `-p` plugin, never committed, makes the race
   happen every run: a coarse clock (`time.time()` and `time.monotonic()` floored to the
   Windows tick above, with `time.sleep` left real, which is how a 3.12 Windows runner
