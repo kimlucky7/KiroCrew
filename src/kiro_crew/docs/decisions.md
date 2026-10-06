@@ -78,7 +78,7 @@ After setting the provider and sampling values, enable the switch only if the da
 
 ## Using Cloudflare Clef
 
-Cloudflare's Clef decision model on Workers AI answers the same questions in the same format as Jev, so it works as the Decisions provider. Cloudflare wraps its answer in a `result` object, and Kiro Crew reads either shape. A reply whose `success` is not `true` is refused like any other unusable answer, and nothing from it is logged.
+Cloudflare's Clef decision model on Workers AI answers the same questions in the same format as Jev, so it works as the Decisions provider. Cloudflare wraps its answer in a `result` object, and Kiro Crew reads either shape. A failure reply carries no `answers` and is refused like any other unusable answer, and nothing from it is logged.
 
 Set `provider` in `config.json` by hand (the Decision model picker only offers Jev and local models), using your own Cloudflare account id:
 
@@ -98,7 +98,7 @@ Set `provider` in `config.json` by hand (the Decision model picker only offers J
 - `model` must be `clef` or `clef-flash`, matching the model in the endpoint path (`@cf/cloudflare/clef` or `@cf/cloudflare/clef-flash`).
 - Store a Cloudflare API token that can run Workers AI in the [secrets vault](secrets-vault.md) under `TYPESAFE_API_KEY`. The name is fixed, whichever provider the key belongs to. It is sent as `Authorization: Bearer <token>`.
 - Changing the endpoint withdraws your consent: turn the Decisions switch off and on again on the card, which shows the Cloudflare address you are agreeing to send messages to.
-- Pricing, rate limits and latency are Cloudflare's; see the [Clef model page](https://developers.cloudflare.com/workers-ai/models/clef/). The default `timeout_ms` is 1000, so raise it if answers often time out, and remember that a slow answer only means the decision falls back.
+- Pricing, rate limits and latency are Cloudflare's; see the [Clef model page](https://developers.cloudflare.com/workers-ai/models/clef/). Kiro Crew keeps its connection to the provider open between decisions, so only the first decision after a quiet spell pays the connection set-up (over a second to Cloudflare's API); raise `timeout_ms` if that one, or a busy model, times out, and remember that a slow answer only means the decision falls back.
 
 ## Running a model on this machine
 

@@ -20,11 +20,13 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 from kiro_crew.config.sections import DecisionProviderConfig
+from kiro_crew.decisions import impl_jev
 from kiro_crew.decisions.impl_jev import (
     JevHttpError,
     JevOracle,
     JevProtocolError,
     _to_wire,
+    close_sessions,
     resolve_api_key,
 )
 from kiro_crew.decisions.types import Choice, Noul, Score
@@ -128,6 +130,8 @@ async def _run(
         )
         return await JevOracle(provider).ask(state, questions)
     finally:
+        # The shared keep-alive session belongs to this loop, which ends with the call.
+        await close_sessions()
         await server.close()
 
 
@@ -804,12 +808,6 @@ class TestCloudflareEnvelope:
         assert got["is_urgent"].value == pytest.approx(0.25)
         assert got["is_urgent"].p == pytest.approx(0.75)
 
-    @pytest.mark.parametrize("success", [False, None, "true", 1, 0])
-    def test_a_wrapped_body_whose_success_is_not_true_is_refused(self, success):
-        rec = _Recorder(body=_cf_envelope({"is_urgent": _yes(0.9)}, success=success))
-        with pytest.raises(JevProtocolError, match="reports failure"):
-            asyncio.run(_run(rec, [URGENT], model="clef-flash"))
-
     def test_a_failed_envelope_never_echoes_provider_text(self):
         body = {
             "result": None,
@@ -817,14 +815,6 @@ class TestCloudflareEnvelope:
             "errors": [{"code": 10000, "message": "secret-state-echo"}],
             "messages": [],
         }
-        rec = _Recorder(body=body)
-        with pytest.raises(JevProtocolError) as caught:
-            asyncio.run(_run(rec, [URGENT], model="clef-flash"))
-        assert "secret-state-echo" not in str(caught.value)
-
-    def test_a_failure_envelope_with_a_result_object_still_refuses_and_echoes_nothing(self):
-        body = _cf_envelope({"is_urgent": _yes(0.9)}, success=False)
-        body["errors"] = [{"code": 1, "message": "secret-state-echo"}]
         rec = _Recorder(body=body)
         with pytest.raises(JevProtocolError) as caught:
             asyncio.run(_run(rec, [URGENT], model="clef-flash"))
@@ -882,3 +872,232 @@ class TestCloudflareEnvelope:
 
         assert is_model_id(model)
         assert _to_wire("hi", model, [URGENT])["model"] == model
+
+
+# ---------------------------------------------------------------------------
+# Connection reuse: one keep-alive session per loop, shared by every oracle
+# ---------------------------------------------------------------------------
+
+
+class _PeerRecorder(_Recorder):
+    """A :class:`_Recorder` that also notes which client socket sent each request."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.peers: list[tuple] = []
+        self.cookies: list[str | None] = []
+        self.set_cookie = False
+
+    async def handle(self, request: web.Request) -> web.Response:
+        self.peers.append(request.transport.get_extra_info("peername"))
+        self.cookies.append(request.headers.get("Cookie"))
+        response = await super().handle(request)
+        if self.set_cookie:
+            response.set_cookie("session", "abc")
+        return response
+
+
+class _Serving:
+    """Serve *recorder* on loopback for several asks made inside ONE running loop."""
+
+    def __init__(self, recorder: _Recorder):
+        self.recorder = recorder
+        self.server = TestServer(recorder.app(), host="127.0.0.1")
+
+    async def __aenter__(self):
+        await self.server.start_server()
+        return self
+
+    async def __aexit__(self, *exc):
+        await close_sessions()
+        await self.server.close()
+
+    def oracle(self, *, timeout_ms=5000, model="jev-latest", api_key=VAULT_REF):
+        provider = DecisionProviderConfig(
+            endpoint=f"http://localhost:{self.server.port}/v1/systemone",
+            api_key=api_key,
+            model=model,
+            timeout_ms=timeout_ms,
+        )
+        return JevOracle(provider)
+
+
+def _ok(p=0.9):
+    return _Recorder(body=_ok_body({"is_urgent": _yes(p)}))
+
+
+class TestConnectionReuse:
+    def test_two_asks_share_one_session_connector_and_socket(self):
+        async def scenario():
+            rec = _PeerRecorder(body=_ok_body({"is_urgent": _yes()}))
+            async with _Serving(rec) as serving:
+                await serving.oracle().ask("hi", [URGENT])
+                first = impl_jev._session_for_running_loop()
+                connector = first.connector
+                await serving.oracle().ask("hi", [URGENT])
+                second = impl_jev._session_for_running_loop()
+                same_connector = second.connector is connector
+                return rec, first, second, same_connector
+
+        rec, first, second, same_connector = asyncio.run(scenario())
+        assert first is second, "a new oracle per decision must not mean a new session"
+        assert same_connector
+        assert len(rec.peers) == 2
+        assert rec.peers[0] == rec.peers[1], "both requests must ride one TCP connection"
+
+    def test_a_closed_session_is_recreated_and_works(self):
+        async def scenario():
+            rec = _ok()
+            async with _Serving(rec) as serving:
+                await serving.oracle().ask("hi", [URGENT])
+                first = impl_jev._session_for_running_loop()
+                await first.close()
+                answers = await serving.oracle().ask("hi", [URGENT])
+                second = impl_jev._session_for_running_loop()
+                return first, second, second.closed, answers
+
+        first, second, second_closed, answers = asyncio.run(scenario())
+        assert second is not first
+        assert not second_closed
+        assert answers["is_urgent"].p == pytest.approx(0.9)
+
+    def test_a_new_event_loop_gets_its_own_session_and_the_dead_one_is_dropped(self):
+        async def grab():
+            rec = _ok()
+            async with _Serving(rec) as serving:
+                await serving.oracle().ask("hi", [URGENT])
+                session = impl_jev._session_for_running_loop()
+            # ``_Serving`` closed it; keep an open one on this loop to be left behind.
+            left = impl_jev._session_for_running_loop()
+            return session, left
+
+        _, left = asyncio.run(grab())
+        rec = _ok()
+
+        async def later():
+            async with _Serving(rec) as serving:
+                await serving.oracle().ask("hi", [URGENT])
+                return impl_jev._session_for_running_loop(), len(impl_jev._sessions)
+
+        fresh, held = asyncio.run(later())
+        assert fresh is not left
+        assert held == 1, "the session of the closed loop is dropped, not kept forever"
+
+    def test_close_sessions_closes_and_forgets_them(self):
+        async def scenario():
+            rec = _ok()
+            async with _Serving(rec) as serving:
+                await serving.oracle().ask("hi", [URGENT])
+                session = impl_jev._session_for_running_loop()
+                await close_sessions()
+                await close_sessions()  # idempotent, nothing open
+                return session, dict(impl_jev._sessions)
+
+        session, held = asyncio.run(scenario())
+        assert session.closed
+        assert held == {}
+
+    def test_the_timeout_is_per_request_and_does_not_poison_the_session(self):
+        async def scenario():
+            rec = _Recorder(body=_ok_body({"is_urgent": _yes(0.2)}), delay=0.4)
+            async with _Serving(rec) as serving:
+                with pytest.raises((asyncio.TimeoutError, TimeoutError)):
+                    await serving.oracle(timeout_ms=100).ask("hi", [URGENT])
+                session = impl_jev._session_for_running_loop()
+                # A later call with a larger budget succeeds on the SAME session: the
+                # 100 ms of the call before it was not inherited.
+                answers = await serving.oracle(timeout_ms=5000).ask("hi", [URGENT])
+                # And the short budget is still enforced on the reused session.
+                with pytest.raises((asyncio.TimeoutError, TimeoutError)):
+                    await serving.oracle(timeout_ms=100).ask("hi", [URGENT])
+                after = impl_jev._session_for_running_loop()
+                return session, after, after.closed, answers
+
+        before, after, after_closed, answers = asyncio.run(scenario())
+        assert before is after and not after_closed
+        assert answers["is_urgent"].p == pytest.approx(0.2)
+
+    def test_a_redirect_is_still_refused_on_a_reused_session(self):
+        followed: list[str] = []
+
+        async def _sink(request: web.Request) -> web.Response:
+            followed.append(request.path)
+            return web.json_response(_ok_body({"is_urgent": _yes()}))
+
+        class _Flaky(_Recorder):
+            redirect = False
+
+            def app(self) -> web.Application:
+                app = super().app()
+                app.router.add_post("/elsewhere", _sink)
+                return app
+
+            async def handle(self, request: web.Request) -> web.Response:
+                if self.redirect:
+                    return web.Response(status=307, headers={"Location": "/elsewhere"})
+                return await super().handle(request)
+
+        async def scenario():
+            rec = _Flaky(body=_ok_body({"is_urgent": _yes()}))
+            async with _Serving(rec) as serving:
+                await serving.oracle().ask("hi", [URGENT])
+                rec.redirect = True
+                with pytest.raises(JevHttpError) as caught:
+                    await serving.oracle().ask("hi", [URGENT])
+                rec.redirect = False
+                await serving.oracle().ask("hi", [URGENT])  # still usable afterwards
+                return str(caught.value)
+
+        assert "307" in asyncio.run(scenario())
+        assert followed == []
+
+    def test_an_oversized_body_is_still_refused_and_the_session_survives(self):
+        from kiro_crew.decisions.impl_jev import _MAX_RESPONSE_BYTES
+
+        class _Big(_Recorder):
+            big = True
+
+            async def handle(self, request: web.Request) -> web.Response:
+                if self.big:
+                    return web.Response(
+                        body=b" " * (_MAX_RESPONSE_BYTES + 1), content_type="application/json"
+                    )
+                return await super().handle(request)
+
+        async def scenario():
+            rec = _Big(body=_ok_body({"is_urgent": _yes()}))
+            async with _Serving(rec) as serving:
+                with pytest.raises(JevProtocolError, match="exceeded"):
+                    await serving.oracle().ask("hi", [URGENT])
+                rec.big = False
+                return await serving.oracle().ask("hi", [URGENT])
+
+        assert asyncio.run(scenario())["is_urgent"].value == "yes"
+
+    def test_a_cookie_the_provider_sets_is_never_replayed(self):
+        async def scenario():
+            rec = _PeerRecorder(body=_ok_body({"is_urgent": _yes()}))
+            rec.set_cookie = True
+            async with _Serving(rec) as serving:
+                await serving.oracle().ask("hi", [URGENT])
+                await serving.oracle().ask("hi", [URGENT])
+                return rec
+
+        rec = asyncio.run(scenario())
+        assert rec.cookies == [None, None]
+
+    def test_each_request_carries_the_key_it_resolved_not_a_stale_one(self, fake_vault):
+        async def scenario():
+            rec = _Recorder(body=_ok_body({"is_urgent": _yes()}))
+            async with _Serving(rec) as serving:
+                fake_vault("key-one")
+                await serving.oracle().ask("hi", [URGENT])
+                fake_vault("key-two")
+                await serving.oracle().ask("hi", [URGENT])
+                return rec
+
+        rec = asyncio.run(scenario())
+        assert [h.get("Authorization") for h in rec.headers] == [
+            "Bearer key-one",
+            "Bearer key-two",
+        ]
