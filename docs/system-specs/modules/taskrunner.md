@@ -864,6 +864,11 @@ with "Loop detected" on the third attempt. Pinned by
 `test/test_task_error_fingerprint.py::TestErrorFingerprint` and by
 `test/test_scenarios_v2_logic.py::TestScenarioCycleDetection::test_different_errors_no_cycle`.
 
+Bracketed pytest parametrize ids (`test_x[1s]`, `test_x[30m]`) are lifted out
+before masking and restored after, so a volatile pattern cannot collapse the
+successive cases of a `pytest -x` run that steps through time-unit ids. Only
+volatile text OUTSIDE a node id's `[...]` is masked.
+
 Fingerprints are comparison-only; `task.error` always keeps the raw text.
 
 ## Step Prompt Context

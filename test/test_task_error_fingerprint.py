@@ -75,3 +75,26 @@ class TestErrorFingerprint:
         first = "bind failed port: 51234 pid=9912 at 2026-09-29T05:00:00Z"
         second = "bind failed port: 51299 pid=9001 at 2026-09-29T05:03:11Z"
         assert _error_fingerprint(first) == _error_fingerprint(second)
+
+    def test_time_unit_node_id_params_are_identity(self) -> None:
+        """A parametrized run advancing through time-unit ids is not a loop.
+
+        ``pytest -x`` steps through ``[1s]``, ``[2s]``, ``[30m]`` -- each a
+        different case. The duration mask would collapse those bracketed node
+        ids to one fingerprint, so on the third failure ``_check_error_loop``
+        would overwrite the real error with "Loop detected" and fail the step.
+        Bracketed node-id params are lifted out before masking, so they stay
+        distinct; this repo's own suite uses such ids (e.g. ``[20s]``,
+        ``[99999h]`` in ``test/test_instances.py``).
+        """
+        a = "Tests failed:\nFAILED test/test_x.py::test_y[1s] - boom"
+        b = "Tests failed:\nFAILED test/test_x.py::test_y[2s] - boom"
+        c = "Tests failed:\nFAILED test/test_x.py::test_y[30m] - boom"
+        assert _error_fingerprint(a) != _error_fingerprint(b)
+        assert _error_fingerprint(b) != _error_fingerprint(c)
+
+    def test_volatile_forms_outside_node_ids_still_mask(self) -> None:
+        """Protecting node ids must not stop masking volatile text elsewhere."""
+        first = "Tests failed:\nFAILED test/test_x.py::test_y[cold] - timed out after 120s"
+        second = "Tests failed:\nFAILED test/test_x.py::test_y[cold] - timed out after 121s"
+        assert _error_fingerprint(first) == _error_fingerprint(second)

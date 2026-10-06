@@ -208,6 +208,14 @@ _VOLATILE_PATTERNS = (
     re.compile(r"\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?\b"),
 )
 _VOLATILE_WS_RE = re.compile(r"\s+")
+#: pytest parametrize ids are bracketed node-id spans (``test_x[2s]``,
+#: ``test_x[1h-cold]``). They are identity, not noise: ``[1s]`` and ``[2s]`` are
+#: the next case of a steadily-advancing run, and a duration/port/hex volatile
+#: pattern would otherwise collapse them so the third failure trips loop
+#: detection and overwrites the real error with "Loop detected". Bracketed spans
+#: are lifted out before masking and restored after, so volatile forms are still
+#: masked everywhere EXCEPT inside a node-id's ``[...]``.
+_NODE_ID_PARAM_RE = re.compile(r"\[[^\[\]]*\]")
 
 
 def _error_fingerprint(error: str) -> str:
@@ -227,8 +235,22 @@ def _error_fingerprint(error: str) -> str:
         text = "\n".join(summary)
     else:
         text = "\n".join(error.splitlines()[:_ERROR_FINGERPRINT_LINES])
+    # Lift bracketed pytest parametrize ids out before masking so a volatile
+    # pattern (e.g. the duration mask) cannot collapse ``test_x[1s]`` and
+    # ``test_x[2s]`` into one fingerprint; they are the next case of an
+    # advancing run, not a loop. Each span is replaced by a stable placeholder
+    # keyed on its ordinal and restored verbatim after masking.
+    protected: list[str] = []
+
+    def _lift(match: "re.Match[str]") -> str:
+        protected.append(match.group(0))
+        return f"\x00{len(protected) - 1}\x00"
+
+    text = _NODE_ID_PARAM_RE.sub(_lift, text)
     for pattern in _VOLATILE_PATTERNS:
         text = pattern.sub("#", text)
+    for index, span in enumerate(protected):
+        text = text.replace(f"\x00{index}\x00", span)
     text = _VOLATILE_WS_RE.sub(" ", text).strip()
     if len(text) > _ERROR_FINGERPRINT_LEN:
         return hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()
