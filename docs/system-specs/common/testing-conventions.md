@@ -288,6 +288,13 @@ the assertion reads as a missing purge. Priced at 300 ms, it fails every run. Th
 confirmed uninstall now sets an `asyncio.Event` as it returns and the test awaits that,
 so the ordering is a fact and the constant is gone.
 
+A cancellation request is not a cancellation acknowledgement. A test that parks a
+worker inside a fake process spawn must keep it parked until the awaiting
+coroutine has set the worker's cancellation signal. Releasing it immediately after
+`task.cancel()` allows a fast fake child to finish normally before cancellation is
+handled. Observe the signal handed to the worker, bound that wait, and always
+release and join the task in `finally`; keep the child-reaping assertion unchanged.
+
 Three forms satisfy the rule, and the tree has a worked example of each.
 
 - **Hold the state until it is observed, then release it.**

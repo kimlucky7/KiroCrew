@@ -35,6 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from kiro_crew import platform_compat  # noqa: E402
 from kiro_crew.dashboard.source_providers import runner  # noqa: E402
 from kiro_crew.testing.ids import unallocatable_pids  # noqa: E402
+from kiro_crew.testing.wait import await_until  # noqa: E402
 
 _BLOCK_SECS = 0.4
 
@@ -306,6 +307,14 @@ class TestBoundsAndCleanupArePreserved:
         reaped: list[int] = []
         in_spawn = threading.Event()
         proceed = threading.Event()
+        cancel_signals: list[threading.Event] = []
+        drain = runner._oneshot_drain_limited
+
+        def _observe_cancel_signal(argv, env, max_output_bytes, handle):
+            cancel_signals.append(handle["cancel"])
+            return drain(argv, env, max_output_bytes, handle)
+
+        monkeypatch.setattr(runner, "_oneshot_drain_limited", _observe_cancel_signal)
 
         class _SlowSpawnPopen:
             pid = _PID_BLOCK
@@ -329,12 +338,23 @@ class TestBoundsAndCleanupArePreserved:
         )
 
         task = asyncio.create_task(runner._run_provider("gh", parse=_parse_ok))
-        await asyncio.to_thread(in_spawn.wait, 10)
-        task.cancel()  # cancel while the spawn is still in flight
-        proceed.set()  # let the spawn return; the worker must then see the cancel
-        with pytest.raises(asyncio.CancelledError):
-            await task
-        assert reaped == [_PID_BLOCK], "a cancel during the spawn orphaned the child"
+        try:
+            assert await asyncio.to_thread(in_spawn.wait, 10), "spawn was never entered"
+            task.cancel()
+            # Keep CreateProcess parked until cancellation has reached the worker's
+            # signal; requesting cancellation alone does not establish that order.
+            assert await asyncio.to_thread(cancel_signals[0].wait, 10), "cancel not signalled"
+            proceed.set()
+            with pytest.raises(asyncio.CancelledError):
+                await await_until(task, what="cancelled provider worker")
+            assert reaped == [_PID_BLOCK], "a cancel during the spawn orphaned the child"
+        finally:
+            proceed.set()
+            if not task.done():
+                task.cancel()
+            await await_until(
+                asyncio.gather(task, return_exceptions=True), what="provider task cleanup"
+            )
 
 
 class TestPosixProviderPathUnchanged:
