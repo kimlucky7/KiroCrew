@@ -134,6 +134,11 @@ bash packaging/build-desktop.sh
 
 Notes:
 
+- The unsigned x64 CI build uses `scripts/build-ci-nsis.js`. After the builder's
+  own short download retries, a structured HTTP 502, 503 or 504 failure gets one
+  fresh-process retry after 30 seconds. A second failure fails the job; other
+  errors are not retried. Both attempts use `publish: "never"`. Native Windows
+  installation and gateway checks still run only after a successful build.
 - **The build must run natively on Windows**, not cross-built from macOS or
   Linux: the script provisions a Windows python-build-standalone interpreter
   via `uv` and executes its `python.exe` to install and verify the bundled
